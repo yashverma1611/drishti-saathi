@@ -2162,7 +2162,14 @@
       lastCriticalAlertTime: 0,
       lastCopilotAnnounceTime: 0,
       lastSpokenSteering: '',
-      wasInCriticalStop: false
+      wasInCriticalStop: false,
+      detectedStairs: {
+        detected: false,
+        stepCount: 0,
+        distance: 3.5,
+        steps: [],
+        lastAlertTime: 0
+      }
     };
 
     function initVisionDepthEngine() {
@@ -2534,6 +2541,85 @@
         let rawCenter = centerResult.dist + visionDepthEngine.tareOffset;
         rawCenter = Math.max(0.25, Math.min(5.0, rawCenter));
 
+        // ================= 2.2 REAL-TIME OPTICAL STAIRCASE & STEP HAZARD DETECTOR =================
+        // Stairs consist of multiple horizontal parallel step lines (risers & treads) spanning the corridor.
+        const detectedStepLines = [];
+        let prevStepRow = -99;
+
+        // Scan central corridor rows from feet level (y = 112) up to horizon (y = 36)
+        for (let y = 112; y >= 36; y -= 2) {
+          let edgePixels = 0;
+          let sumGradY = 0;
+          let sumGradX = 0;
+          const totalCols = 25; // Sample points across x = 32..128 (center corridor)
+
+          for (let x = 32; x <= 128; x += 4) {
+            const lumCurrent = getLum(x, y);
+            const lumAbove = getLum(x, y - 2);
+            const lumRight = (x < 156) ? getLum(x + 2, y) : lumCurrent;
+            const lumLeft = (x > 2) ? getLum(x - 2, y) : lumCurrent;
+
+            const gy = Math.abs(lumCurrent - lumAbove);
+            const gx = Math.abs(lumRight - lumLeft);
+
+            sumGradY += gy;
+            sumGradX += gx;
+
+            // Distinct vertical edge transition across the horizontal step
+            if (gy >= 9) {
+              edgePixels++;
+            }
+          }
+
+          // Step edge criterion:
+          // 1. At least 28% of corridor pixels show a vertical step gradient
+          // 2. Vertical gradient dominates horizontal gradient (edge is horizontal across the path)
+          const isStepRow = (edgePixels / totalCols >= 0.28) && (sumGradY > sumGradX * 1.08);
+
+          if (isStepRow) {
+            // Cluster rows so single steps aren't counted multiple times (min 5px vertical separation)
+            if (Math.abs(y - prevStepRow) >= 5) {
+              detectedStepLines.push(y);
+              prevStepRow = y;
+            }
+          }
+        }
+
+        // CONFIRMATION: If 3 or more spaced horizontal step lines are present in the corridor:
+        if (detectedStepLines.length >= 3) {
+          const bottomStepY = detectedStepLines[0]; // Nearest step to feet
+          let stairDistMeters = 1.2;
+          if (bottomStepY >= 106) {
+            stairDistMeters = 0.50; // Step right at feet level (<0.6m) - Emergency Danger!
+          } else if (bottomStepY >= 90) {
+            stairDistMeters = 0.85; // 0.8m - 1.0m
+          } else if (bottomStepY >= 72) {
+            stairDistMeters = 1.35; // 1.2m - 1.5m
+          } else if (bottomStepY >= 54) {
+            stairDistMeters = 1.95; // 1.8m - 2.2m
+          } else {
+            stairDistMeters = 2.60;
+          }
+
+          visionDepthEngine.detectedStairs = {
+            detected: true,
+            stepCount: detectedStepLines.length,
+            distance: stairDistMeters,
+            steps: detectedStepLines,
+            bottomStepY: bottomStepY
+          };
+
+          // Override rawCenter to ensure stairs distance takes precedence over clear open air above!
+          rawCenter = Math.min(rawCenter, stairDistMeters);
+        } else {
+          visionDepthEngine.detectedStairs = {
+            detected: false,
+            stepCount: 0,
+            distance: 3.5,
+            steps: []
+          };
+        }
+
         // ================= INSTANT OBSTACLE REMOVAL CLEARANCE =================
         // If system was in 0.5m critical stop, but obstacle has been removed (now >= 0.85m):
         if (visionDepthEngine.wasInCriticalStop && rawCenter >= 0.85) {
@@ -2661,9 +2747,38 @@
       // Check for obstacles in path (Glass, Motorcycle, Bed, Person, etc.)
       const obstacleHazard = (typeof objectDetectionEngine !== 'undefined') ? objectDetectionEngine.getClosestObstacleInPath() : null;
       const isObstacleInPath = obstacleHazard && obstacleHazard.distance <= 2.6;
+      const hasStairs = visionDepthEngine.detectedStairs && visionDepthEngine.detectedStairs.detected;
 
+      // ================= 0.5 CRITICAL STAIRCASE & STEP HAZARD PRIORITY =================
+      if (hasStairs) {
+        const sDist = visionDepthEngine.detectedStairs.distance.toFixed(1);
+        const isCriticalStep = visionDepthEngine.detectedStairs.distance <= 0.75;
+        recommendedSteer = isCriticalStep ? 'STOP' : 'FORWARD';
+        steerGuideText = isCriticalStep
+          ? `🛑 STOP: STAIRS AHEAD (${sDist}m) // रुकें: सीढ़ियाँ`
+          : `🪜 CAUTION: STAIRS IN PATH (${sDist}m) // सीढ़ियों पर संभलें`;
+        steerColor = isCriticalStep ? 'text-red-400 font-bold animate-pulse' : 'text-amber-400 font-bold';
+
+        if (now - (visionDepthEngine.detectedStairs.lastAlertTime || 0) > 2800) {
+          visionDepthEngine.detectedStairs.lastAlertTime = now;
+          playStarkChime('critical-stop');
+          if (isCriticalStep) {
+            triggerHaptic('danger');
+            const stopMsg = jarvisState.language === 'hi'
+              ? `रुकिए! सामने सीढ़ियाँ हैं, केवल ${sDist} मीटर! आगे न बढ़ें, संभलकर कदम रखें!`
+              : `STOP! Stairs directly ahead at ${sDist} meters! Walk with extreme caution!`;
+            interruptAndAlert(stopMsg);
+          } else {
+            triggerHaptic('warning');
+            const warnMsg = jarvisState.language === 'hi'
+              ? `सावधान: रास्ते में सीढ़ियाँ हैं, दूरी ${sDist} मीटर। संभलकर चलें।`
+              : `Caution: Stairs ahead in your path, ${sDist} meters. Watch your step carefully.`;
+            speakJarvis(warnMsg);
+          }
+        }
+      }
       // ================= 1. PATH OBSTACLES (GLASS, MOTORCYCLE, BED, PERSON) PRIORITY =================
-      if (isObstacleInPath) {
+      else if (isObstacleInPath) {
         const oDist = obstacleHazard.distance.toFixed(1);
         const turnRight = (obstacleHazard.sector === 'LEFT') || (dr >= dl && dr >= 1.4);
         recommendedSteer = turnRight ? 'RIGHT' : 'LEFT';
@@ -2861,8 +2976,33 @@
       const dc = (typeof visionDepthEngine !== 'undefined') ? visionDepthEngine.distCenter : 3.5;
       const steer = (typeof visionDepthEngine !== 'undefined') ? visionDepthEngine.currentRecommendedSteering : 'FORWARD';
 
-      // 1. Primary In-Front Entity
-      if (obstacleHazard) {
+      const hasStairs = (typeof visionDepthEngine !== 'undefined') && visionDepthEngine.detectedStairs && visionDepthEngine.detectedStairs.detected;
+
+      // 1. Primary In-Front Entity (Stairs, Obstacles, Natural Walls, or Clear Corridor)
+      if (hasStairs) {
+        const sDist = visionDepthEngine.detectedStairs.distance.toFixed(1);
+        const isCritical = visionDepthEngine.detectedStairs.distance <= 0.75;
+        if (iconEl) iconEl.innerText = '🪜';
+        if (catEl) catEl.innerText = isCritical ? '🛑 CRITICAL FALL HAZARD' : '⚠️ STAIRCASE / STEPS DETECTED';
+        if (confEl) confEl.innerText = `• ${visionDepthEngine.detectedStairs.stepCount} STEPS DETECTED`;
+        if (nameEnEl) nameEnEl.innerText = isCritical ? 'STAIRS AHEAD (STOP)' : 'STAIRS / STEPS';
+        if (nameHiEl) nameHiEl.innerText = isCritical ? 'सामने सीढ़ियाँ हैं (रुकिए)' : 'सीढ़ियाँ (सावधान)';
+        if (distEl) {
+          distEl.innerText = `${sDist}m`;
+          distEl.className = isCritical ? 'font-hud text-lg font-black text-red-400 block leading-none animate-pulse' : 'font-hud text-lg font-black text-amber-400 block leading-none';
+        }
+        if (hazardTagEl) {
+          hazardTagEl.innerText = isCritical ? '🛑 STOP HAZARD' : '⚠️ IN PATH';
+          hazardTagEl.className = isCritical
+            ? 'inline-block mt-1 px-1.5 py-0.5 rounded text-[8px] font-mono-hud font-bold bg-red-950 text-red-300 border border-red-500/50 animate-pulse'
+            : 'inline-block mt-1 px-1.5 py-0.5 rounded text-[8px] font-mono-hud font-bold bg-amber-950 text-amber-300 border border-amber-500/50 animate-pulse';
+        }
+        if (dirEl) dirEl.innerText = `AHEAD [${currentCard.en.toUpperCase()}]`;
+        if (guideEl) {
+          guideEl.innerText = isCritical ? '🛑 STOP: WATCH YOUR STEP // संभलकर चलें' : '🪜 CAUTION: STAIRS AHEAD // सीढ़ियों पर संभलें';
+          guideEl.className = isCritical ? 'text-red-400 font-bold' : 'text-amber-300 font-bold';
+        }
+      } else if (obstacleHazard) {
         const oDist = obstacleHazard.distance.toFixed(1);
         const icon = obstacleHazard.isHuman ? '👤' : (obstacleHazard.isGlassOrCup ? '🥛' : (obstacleHazard.isVehicle ? '🏍️' : (obstacleHazard.isFurniture ? '🛏️' : '📦')));
         const turnRight = (obstacleHazard.sector === 'LEFT') || ((typeof visionDepthEngine !== 'undefined') && visionDepthEngine.distRight >= visionDepthEngine.distLeft);
@@ -2930,12 +3070,26 @@
       }
 
       // 2. Populate All Objects in View Chips
-      if (countEl) countEl.innerText = `${detections.length} DETECTED`;
+      const totalCount = detections.length + (hasStairs ? 1 : 0);
+      if (countEl) countEl.innerText = `${totalCount} DETECTED`;
       if (listEl) {
-        if (detections.length === 0) {
+        let stairsChip = '';
+        if (hasStairs) {
+          const sDist = visionDepthEngine.detectedStairs.distance.toFixed(1);
+          stairsChip = `
+            <div class="flex items-center gap-1.5 px-2 py-1 rounded border border-red-500/80 bg-red-950/80 text-red-200 text-[9px] font-mono-hud animate-pulse">
+              <span>🪜</span>
+              <span class="font-bold">STAIRS (सीढ़ियाँ)</span>
+              <span class="text-yellow-300 font-bold">${sDist}m</span>
+              <span class="text-[8px] bg-red-900 px-1 rounded text-white font-bold">HAZARD</span>
+            </div>
+          `;
+        }
+
+        if (detections.length === 0 && !hasStairs) {
           listEl.innerHTML = `<span class="text-[9px] font-mono-hud text-slate-400 italic py-1 px-2">Path clear for ${dc.toFixed(1)}m. No obstacles detected.</span>`;
         } else {
-          listEl.innerHTML = detections.map(d => {
+          const detChips = detections.map(d => {
             const icon = d.isHuman ? '👤' : (d.isGlassOrCup ? '🥛' : (d.isVehicle ? '🏍️' : (d.isFurniture ? '🛏️' : '📦')));
             const badgeBg = d.isInPath ? 'bg-amber-950/80 border-amber-500/60 text-amber-200' : 'bg-slate-900/80 border-slate-700/60 text-slate-300';
             const inPathDot = d.isInPath ? '<span class="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping"></span>' : '';
@@ -2949,6 +3103,7 @@
               </div>
             `;
           }).join('');
+          listEl.innerHTML = stairsChip + detChips;
         }
       }
     }
@@ -2963,6 +3118,27 @@
           ? "सावधान: कैमरा हाथ या वस्तु से ढका हुआ है। कृपया कैमरा साफ करें।"
           : "Warning: Camera lens is covered by your hand or an object. Please uncover the camera.";
         speakJarvis(msg, true);
+        return;
+      }
+
+      // Check for stairs in path
+      if (visionDepthEngine.detectedStairs && visionDepthEngine.detectedStairs.detected) {
+        const sDist = visionDepthEngine.detectedStairs.distance.toFixed(1);
+        const isCritical = visionDepthEngine.detectedStairs.distance <= 0.75;
+        playStarkChime('critical-stop');
+        if (isCritical) {
+          triggerHaptic('danger');
+          const msg = jarvisState.language === 'hi'
+            ? `रुकिए! सामने सीढ़ियाँ हैं केवल ${sDist} मीटर पर। आगे न बढ़ें, संभलकर कदम रखें!`
+            : `STOP! Stairs directly ahead at ${sDist} meters! Watch your step carefully!`;
+          speakJarvis(msg, true);
+        } else {
+          triggerHaptic('warning');
+          const msg = jarvisState.language === 'hi'
+            ? `सावधान: रास्ते में सीढ़ियाँ हैं, दूरी ${sDist} मीटर। संभलकर कदम रखें।`
+            : `Caution: Stairs ahead in your path, ${sDist} meters. Watch your step.`;
+          speakJarvis(msg);
+        }
         return;
       }
 
@@ -3078,6 +3254,13 @@
         const item = teachableVisionEngine.targetMatch.item;
         objectsPartsEn.push(`your personal item ${item.nameEn} directly ahead`);
         objectsPartsHi.push(`आपकी वस्तु ${item.nameHi} सामने`);
+      }
+
+      // Check detected optical stairs in path
+      if (visionDepthEngine.detectedStairs && visionDepthEngine.detectedStairs.detected) {
+        const sDist = visionDepthEngine.detectedStairs.distance.toFixed(1);
+        objectsPartsEn.unshift(`stairs directly in your path at ${sDist} meters`);
+        objectsPartsHi.unshift(`रास्ते में ${sDist} मीटर पर सीढ़ियाँ`);
       }
 
       // Check detected COCO objects & humans
@@ -3520,9 +3703,10 @@
       camCtx.fillText(`R: ${visionDepthEngine.distRight.toFixed(1)}m`, w - 48, h - 6);
 
       // Center Steering Direction Compass Pill
+      const hasStairs = visionDepthEngine.detectedStairs && visionDepthEngine.detectedStairs.detected;
       camCtx.fillStyle = visionDepthEngine.isLensOccluded 
         ? 'rgba(217, 119, 6, 0.95)' 
-        : (d <= 0.55 ? 'rgba(239, 68, 68, 0.9)' : (steer === 'FORWARD' ? 'rgba(16, 185, 129, 0.85)' : 'rgba(245, 158, 11, 0.85)'));
+        : (hasStairs ? 'rgba(239, 68, 68, 0.9)' : (d <= 0.55 ? 'rgba(239, 68, 68, 0.9)' : (steer === 'FORWARD' ? 'rgba(16, 185, 129, 0.85)' : 'rgba(245, 158, 11, 0.85)')));
       camCtx.fillRect(w * 0.16, 4, w * 0.68, 16);
       camCtx.fillStyle = '#020612';
       camCtx.font = 'bold 9px monospace';
@@ -3531,7 +3715,7 @@
       const leftCard = compassEngine.getRelativeCardinal(-90).en.toUpperCase();
       const steerPillText = visionDepthEngine.isLensOccluded 
         ? '⚠️ UNCOVER CAMERA LENS' 
-        : (steer === 'STOP' ? '🛑 STOP: WALL 0.5M' : (steer === 'RIGHT' ? `➔ TURN RIGHT [${rightCard}]` : (steer === 'LEFT' ? `⬅ TURN LEFT [${leftCard}]` : `↑ STRAIGHT [${facingCard}]`)));
+        : (hasStairs ? `🪜 STAIRS [${visionDepthEngine.detectedStairs.distance.toFixed(1)}m] CAUTION` : (steer === 'STOP' ? '🛑 STOP: WALL 0.5M' : (steer === 'RIGHT' ? `➔ TURN RIGHT [${rightCard}]` : (steer === 'LEFT' ? `⬅ TURN LEFT [${leftCard}]` : `↑ STRAIGHT [${facingCard}]`))));
       camCtx.fillText(steerPillText, w * 0.18, 15);
 
       // Full-Frame Occlusion Warning Banner
@@ -3652,6 +3836,25 @@
         camCtx.fillStyle = '#ffffff';
         camCtx.font = 'bold 8.5px monospace';
         camCtx.fillText(`★ ${tm.item.nameEn.toUpperCase()} (${Math.round(tm.similarity * 100)}%)`, tx + 4, ty - 4);
+      }
+
+      // Render Optical Staircase Step Laser Guidelines
+      if (visionDepthEngine.detectedStairs && visionDepthEngine.detectedStairs.detected && visionDepthEngine.detectedStairs.steps && visionDepthEngine.detectedStairs.steps.length > 0) {
+        camCtx.lineWidth = 2.5;
+        camCtx.strokeStyle = 'rgba(250, 204, 21, 0.9)';
+        camCtx.fillStyle = '#facc15';
+        camCtx.font = 'bold 9px monospace';
+
+        visionDepthEngine.detectedStairs.steps.forEach((stepY, idx) => {
+          const canvasY = (stepY / 120) * h;
+          camCtx.beginPath();
+          camCtx.moveTo(w * 0.18, canvasY);
+          camCtx.lineTo(w * 0.82, canvasY);
+          camCtx.stroke();
+          if (idx === 0) {
+            camCtx.fillText(`🪜 FIRST STEP [${visionDepthEngine.detectedStairs.distance.toFixed(1)}m]`, w * 0.20, canvasY - 4);
+          }
+        });
       }
 
       requestAnimationFrame(renderOpticalVisionCanvas);
