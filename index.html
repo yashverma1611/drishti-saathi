@@ -2632,13 +2632,13 @@
               const lum = getLum(x, y);
               const grad = Math.abs(lum - getLum(x, y - 2));
               const diffFloor = Math.abs(lum - floorLum);
-              if (diffFloor > 26 || grad > 20) {
+              if (diffFloor > 12 || grad > 8) {
                 bottomHits++;
               }
             }
           }
           const totalBottomSamples = 5 * totalColumns;
-          const isDirectClose = (bottomHits / totalBottomSamples) > 0.42;
+          const isDirectClose = (bottomHits / totalBottomSamples) > 0.20;
 
           if (isDirectClose) {
             return { dist: 0.45, contactY: 112, isClose: true };
@@ -2652,33 +2652,33 @@
               const lum = getLum(x, y);
               const grad = Math.abs(lum - getLum(x, y - 2));
               const diffFloor = Math.abs(lum - floorLum);
-              if (grad > 22 || diffFloor > 28) {
+              if (grad > 9 || diffFloor > 12) {
                 rowDiff++;
               }
             }
-            if ((rowDiff / totalColumns) > 0.38) {
+            if ((rowDiff / totalColumns) > 0.16) {
               contactY = y;
               break;
             }
           }
 
           // Convert vertical row to calibrated physical perspective distance (meters)
-          let distMeters = 3.6;
-          if (contactY >= 110) {
-            // 0.40m - 0.70m (Natural wall extremely close)
-            distMeters = 0.40 + ((118 - contactY) / 8) * 0.30;
-          } else if (contactY >= 92) {
-            // 0.70m - 1.40m (Wall in stopping / steering range)
-            distMeters = 0.70 + ((110 - contactY) / 18) * 0.70;
-          } else if (contactY >= 70) {
-            // 1.40m - 2.40m (Medium distance room wall)
-            distMeters = 1.40 + ((92 - contactY) / 22) * 1.00;
+          let distMeters = 3.5;
+          if (contactY >= 106) {
+            // 0.40m - 0.75m (Object/wall extremely close in forward path)
+            distMeters = 0.40 + ((118 - contactY) / 12) * 0.35;
+          } else if (contactY >= 88) {
+            // 0.75m - 1.40m (Stopping / steering range)
+            distMeters = 0.75 + ((106 - contactY) / 18) * 0.65;
+          } else if (contactY >= 66) {
+            // 1.40m - 2.40m (Medium distance room object/wall)
+            distMeters = 1.40 + ((88 - contactY) / 22) * 1.00;
           } else if (contactY >= 48) {
-            // 2.40m - 3.60m (Far wall / corridor)
-            distMeters = 2.40 + ((70 - contactY) / 22) * 1.20;
+            // 2.40m - 3.50m (Far wall / corridor)
+            distMeters = 2.40 + ((66 - contactY) / 18) * 1.10;
           } else {
-            // 3.60m - 4.50m (Open clear space)
-            distMeters = 3.60 + ((48 - Math.max(36, contactY)) / 12) * 0.90;
+            // 3.50m (Open clear space)
+            distMeters = 3.5;
           }
 
           return { dist: distMeters, contactY, isClose: false };
@@ -2690,6 +2690,16 @@
 
         let rawCenter = centerResult.dist + visionDepthEngine.tareOffset;
         rawCenter = Math.max(0.25, Math.min(5.0, rawCenter));
+
+        // MULTI-AI SENSOR FUSION: Model 1 Neural Detections fused directly into rawCenter!
+        if (typeof objectDetectionEngine !== 'undefined' && objectDetectionEngine.detections && objectDetectionEngine.detections.length > 0) {
+          const frontDets = objectDetectionEngine.detections.filter(d => 
+            d.isInPath || d.sector === 'FORWARD' || Math.abs((d.normBbox.x + d.normBbox.w / 2) - 0.5) < 0.28
+          );
+          if (frontDets.length > 0) {
+            rawCenter = Math.min(rawCenter, frontDets[0].distance);
+          }
+        }
 
         // ================= 2.2 REAL-TIME OPTICAL STAIRCASE & STEP HAZARD DETECTOR =================
         // Stairs consist of multiple horizontal parallel step lines (risers & treads) spanning the corridor.
@@ -3009,7 +3019,19 @@
         recommendedSteer = turnRight ? 'RIGHT' : 'LEFT';
         const targetCard = turnRight ? rightCard : leftCard;
 
-        const icon = obstacleHazard.isHuman ? '👤' : (obstacleHazard.isGlassOrCup ? '🥛' : (obstacleHazard.isVehicle ? '🏍️' : (obstacleHazard.isFurniture ? '🛏️' : '⚠️')));
+        let icon = '⚠️';
+        const oc = (obstacleHazard.class || '').toLowerCase();
+        if (obstacleHazard.isHuman) icon = '👤';
+        else if (oc === 'laptop') icon = '💻';
+        else if (oc === 'bottle') icon = '🍾';
+        else if (oc === 'bed') icon = '🛏️';
+        else if (oc === 'chair' || oc === 'couch') icon = '🪑';
+        else if (obstacleHazard.isGlassOrCup) icon = '🥛';
+        else if (obstacleHazard.isVehicle) icon = '🏍️';
+        else if (obstacleHazard.isFurniture) icon = '🛏️';
+
+        const frontIconEl = document.getElementById('front-obj-icon');
+        if (frontIconEl) frontIconEl.innerText = icon;
         steerGuideText = `${icon} ${obstacleHazard.nameEn} IN PATH (${oDist}m) ➔ TURN ${turnRight ? 'RIGHT' : 'LEFT'} [${targetCard.en.toUpperCase()}]`;
         steerColor = 'text-amber-400 font-bold';
 
@@ -3612,7 +3634,9 @@
 
           // Synonyms & everyday query aliases
           if (!isMatch) {
-            if ((c === 'wine glass' || c === 'bottle' || c === 'cup') && (cleanQ.includes('glass') || cleanQ.includes('गिलास') || cleanQ.includes('ग्लास') || cleanQ.includes('cup') || cleanQ.includes('कप'))) isMatch = true;
+            if ((c === 'wine glass' || c === 'bottle' || c === 'cup') && (cleanQ.includes('glass') || cleanQ.includes('bottle') || cleanQ.includes('बोतल') || cleanQ.includes('पानी') || cleanQ.includes('water') || cleanQ.includes('गिलास') || cleanQ.includes('ग्लास') || cleanQ.includes('cup') || cleanQ.includes('कप'))) isMatch = true;
+            if ((c === 'laptop') && (cleanQ.includes('laptop') || cleanQ.includes('लैपटॉप') || cleanQ.includes('computer') || cleanQ.includes('कंप्यूटर'))) isMatch = true;
+            if ((c === 'chair') && (cleanQ.includes('chair') || cleanQ.includes('कुर्सी'))) isMatch = true;
             if ((c === 'motorcycle' || c === 'bicycle') && (cleanQ.includes('motorcycle') || cleanQ.includes('bike') || cleanQ.includes('बाइक') || cleanQ.includes('मोटरसाइकिल') || cleanQ.includes('साइकिल'))) isMatch = true;
             if (c === 'bed' && (cleanQ.includes('bed') || cleanQ.includes('बिस्तर') || cleanQ.includes('पलंग') || cleanQ.includes('khat'))) isMatch = true;
             if (c === 'couch' && (cleanQ.includes('couch') || cleanQ.includes('sofa') || cleanQ.includes('सोफा') || cleanQ.includes('सोफ़ा'))) isMatch = true;
@@ -4240,7 +4264,11 @@
       getStatus() {
         if (!this.isOnline) return 'STANDBY';
         const cnt = this.detections.length;
-        return cnt > 0 ? `${cnt} OBJECT${cnt > 1 ? 'S' : ''} DETECTED` : '80 CLASSES ACTIVE';
+        if (cnt > 0) {
+          const top = this.detections[0];
+          return `${top.nameEn} [${top.distance.toFixed(1)}m]`;
+        }
+        return '80 CLASSES ACTIVE';
       }
     };
 
@@ -4360,7 +4388,9 @@
       isLoaded: false,
       isDetecting: false,
       lastInferenceTime: 0,
-      minConfidence: 0.45,
+      lastAnnouncementTime: 0,
+      lastAnnouncedClass: '',
+      minConfidence: 0.30,
       detections: [], // Array of { class, score, bbox, normBbox, sector, sectorHi, distance, nameHi, nameEn }
       
       async loadModel() {
@@ -4385,6 +4415,11 @@
           } else {
             console.warn('cocoSsd library not yet available in window');
             this.isLoading = false;
+            setTimeout(() => {
+              if (!this.isLoaded && !this.isLoading) {
+                this.loadModel();
+              }
+            }, 1200);
           }
         } catch (err) {
           console.warn('Failed to load COCO-SSD:', err);
@@ -4437,18 +4472,39 @@
             } else if (cls === 'bed') {
               friendlyNameEn = 'BED';
               friendlyNameHi = 'बिस्तर';
-            } else if (cls === 'motorcycle') {
-              friendlyNameEn = 'MOTORCYCLE';
-              friendlyNameHi = 'मोटरसाइकिल';
-            } else if (cls === 'bicycle') {
-              friendlyNameEn = 'BICYCLE';
-              friendlyNameHi = 'साइकिल';
+            } else if (cls === 'laptop') {
+              friendlyNameEn = 'LAPTOP';
+              friendlyNameHi = 'लैपटॉप';
+            } else if (cls === 'bottle') {
+              friendlyNameEn = 'BOTTLE';
+              friendlyNameHi = 'पानी की बोतल';
+            } else if (cls === 'cup') {
+              friendlyNameEn = 'CUP';
+              friendlyNameHi = 'चाय का कप';
+            } else if (cls === 'chair') {
+              friendlyNameEn = 'CHAIR';
+              friendlyNameHi = 'कुर्सी';
             } else if (cls === 'couch') {
               friendlyNameEn = 'SOFA';
               friendlyNameHi = 'सोफ़ा';
             } else if (cls === 'dining table') {
               friendlyNameEn = 'TABLE';
               friendlyNameHi = 'मेज़';
+            } else if (cls === 'cell phone') {
+              friendlyNameEn = 'PHONE';
+              friendlyNameHi = 'मोबाइल फ़ोन';
+            } else if (cls === 'tv') {
+              friendlyNameEn = 'TV';
+              friendlyNameHi = 'टीवी स्क्रीन';
+            } else if (cls === 'book') {
+              friendlyNameEn = 'BOOK';
+              friendlyNameHi = 'किताब';
+            } else if (cls === 'motorcycle') {
+              friendlyNameEn = 'MOTORCYCLE';
+              friendlyNameHi = 'मोटरसाइकिल';
+            } else if (cls === 'bicycle') {
+              friendlyNameEn = 'BICYCLE';
+              friendlyNameHi = 'साइकिल';
             }
 
             // Path Corridor Intersection (Central Walking Path: 28% to 72% screen width)
@@ -4458,34 +4514,49 @@
             const isInPath = ((nx < pathRight && objRight > pathLeft) || simple.code === 'FORWARD');
 
             // High-Precision Metric Distance Calculation (Ground Perspective + Optical Pinhole)
-            let dGround = 3.6;
-            if (bottomY >= 0.90) {
-              dGround = 0.40 + (1.0 - bottomY) * 3.0;
-            } else if (bottomY >= 0.65) {
-              dGround = 0.80 + ((0.90 - bottomY) / 0.25) * 1.5;
+            let dGround = 3.5;
+            if (bottomY >= 0.88) {
+              dGround = 0.40 + (1.0 - bottomY) * 2.8;
+            } else if (bottomY >= 0.60) {
+              dGround = 0.75 + ((0.88 - bottomY) / 0.28) * 1.35;
             } else {
-              dGround = 2.30 + ((0.65 - Math.max(0.3, bottomY)) / 0.35) * 1.8;
+              dGround = 2.10 + ((0.60 - Math.max(0.25, bottomY)) / 0.35) * 1.4;
             }
 
-            let dist = 3.6;
+            // Optical Metric Pinhole Sizing for Elevated & Tabletop Objects
+            let dOptical = 3.5;
             if (isHuman) {
-              const dOptical = (0.88 * 1.70) / Math.max(0.08, nh);
-              dist = (bottomY >= 0.75) ? (dGround * 0.65 + dOptical * 0.35) : (dOptical * 0.75 + dGround * 0.25);
+              dOptical = (0.85 * 1.65) / Math.max(0.06, nh);
+            } else if (cls === 'laptop') {
+              const effDim = Math.max(nw / 0.33, nh / 0.22);
+              dOptical = 0.80 / Math.max(0.20, effDim);
+            } else if (isGlassOrCup || cls === 'bottle' || cls === 'cup') {
+              dOptical = (0.75 * 0.24) / Math.max(0.05, nh);
+            } else if (cls === 'bed') {
+              const bedDim = Math.max(nw / 1.5, nh / 0.6);
+              dOptical = 0.90 / Math.max(0.30, bedDim);
+            } else if (cls === 'chair' || cls === 'couch') {
+              dOptical = (0.80 * 0.80) / Math.max(0.10, Math.max(nw * 0.9, nh));
+            } else if (cls === 'cell phone') {
+              dOptical = (0.70 * 0.15) / Math.max(0.04, nh);
             } else if (isVehicle) {
               const realH = (cls === 'car' || cls === 'truck' || cls === 'bus') ? 1.50 : 1.10;
-              const dOptical = (0.88 * realH) / Math.max(0.08, nh);
-              dist = (bottomY >= 0.70) ? (dGround * 0.60 + dOptical * 0.40) : (dOptical * 0.70 + dGround * 0.30);
-            } else if (isFurniture) {
-              const realH = (cls === 'bed') ? 0.75 : 0.85;
-              const dOptical = (0.88 * realH) / Math.max(0.08, nh);
-              dist = (bottomY >= 0.65) ? (dGround * 0.65 + dOptical * 0.35) : (dOptical * 0.65 + dGround * 0.35);
-            } else if (isGlassOrCup) {
-              const dOptical = (0.88 * 0.20) / Math.max(0.04, nh);
-              dist = (bottomY >= 0.75) ? (dGround * 0.75 + dOptical * 0.25) : (dOptical * 0.55 + dGround * 0.45);
+              dOptical = (0.85 * realH) / Math.max(0.08, nh);
             } else {
-              dist = dGround;
+              dOptical = (0.75 * 0.40) / Math.max(0.08, Math.max(nw, nh));
             }
-            dist = Math.max(0.35, Math.min(5.0, dist));
+
+            let dist = 3.5;
+            if (['laptop', 'bottle', 'cup', 'wine glass', 'cell phone', 'mouse', 'keyboard', 'book', 'bowl'].includes(cls)) {
+              dist = dOptical;
+            } else if (cls === 'bed') {
+              dist = Math.min(dOptical, dGround);
+            } else if (isHuman) {
+              dist = (bottomY >= 0.75) ? (dGround * 0.55 + dOptical * 0.45) : (dOptical * 0.70 + dGround * 0.30);
+            } else {
+              dist = Math.min(dGround, dOptical);
+            }
+            dist = Math.max(0.30, Math.min(4.8, dist));
 
             results.push({
               class: pred.class,
@@ -4530,6 +4601,37 @@
             if (objNameEn) objNameEn.innerText = `${top.isHuman ? '👤 ' : ''}${top.nameEn}${pathBadge} (${top.distance.toFixed(1)}m, ${top.simpleDir.toUpperCase()})`;
             if (objNameHi) objNameHi.innerText = `${top.isHuman ? '👤 ' : ''}${top.nameHi}${pathBadgeHi} (${top.distance.toFixed(1)}m, ${top.simpleDirHi})`;
             if (objConf) objConf.innerText = `${Math.round(top.score * 100)}% MATCH (${top.isHuman ? 'HUMAN RADAR' : (top.isInPath ? 'PATH OBSTACLE' : 'COCO')})`;
+
+            // AUTOMATIC PROACTIVE OBSTACLE ANNOUNCER (Bed, Laptop, Bottle, Chair, Person, etc.)
+            const isAhead = top.isInPath || top.sector === 'FORWARD' || top.distance <= 2.2;
+            if (isAhead && (now - this.lastAnnouncementTime > 3200 || this.lastAnnouncedClass !== top.class)) {
+              this.lastAnnouncementTime = now;
+              this.lastAnnouncedClass = top.class;
+
+              const dStr = top.distance.toFixed(1);
+              const dirWordHi = (top.sector === 'LEFT') ? 'बाईं ओर' : ((top.sector === 'RIGHT') ? 'दाईं ओर' : 'सामने');
+              const dirWordEn = (top.sector === 'LEFT') ? 'on your left' : ((top.sector === 'RIGHT') ? 'on your right' : 'directly ahead');
+              const steerHi = (top.sector === 'LEFT') ? 'दाएं मुड़ें' : ((top.sector === 'RIGHT') ? 'बाएं मुड़ें' : 'संभलकर चलें');
+              const steerEn = (top.sector === 'LEFT') ? 'turn right' : ((top.sector === 'RIGHT') ? 'turn left' : 'step carefully');
+
+              let speakText = '';
+              if (jarvisState.language === 'hi') {
+                if (top.distance <= 0.8) {
+                  speakText = `सावधान! ठीक ${dirWordHi} ${top.nameHi} है, केवल ${dStr} मीटर! ${steerHi}।`;
+                } else {
+                  speakText = `${dirWordHi} ${top.nameHi} है, दूरी ${dStr} मीटर। ${steerHi}।`;
+                }
+              } else {
+                if (top.distance <= 0.8) {
+                  speakText = `Warning! ${top.nameEn} ${dirWordEn}, only ${dStr} meters! Please ${steerEn}.`;
+                } else {
+                  speakText = `Caution: ${top.nameEn} ${dirWordEn}, distance ${dStr} meters. ${steerEn}.`;
+                }
+              }
+
+              playStarkChime('ack');
+              speakJarvis(speakText);
+            }
           }
         } catch (err) {
           // ignore transient video read errors
