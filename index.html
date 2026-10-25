@@ -476,9 +476,9 @@
 
         <!-- Sonic Floor Projection Radar Graphic -->
         <div class="mt-4 p-3 bg-black/40 rounded-xl border border-slate-800">
-          <div class="text-[10px] font-mono-hud text-slate-400 mb-1 flex justify-between">
+          <div class="text-[10px] font-mono-hud text-slate-400 mb-1 flex justify-between items-center">
             <span>TACTILE RADAR SCAN:</span>
-            <span class="text-cyan-400">120° FOV</span>
+            <span id="radar-compass-readout" class="text-cyan-300 font-bold">🧭 0° N [उत्तर]</span>
           </div>
           <div class="relative w-full h-24 flex items-center justify-center overflow-hidden">
             <svg class="w-full h-full" viewBox="0 0 160 80">
@@ -615,8 +615,9 @@
               </span>
             </div>
             
-            <div class="flex justify-between text-[8px] font-mono-hud text-slate-300 bg-black/70 px-1.5 py-0.5 rounded">
+            <div class="flex justify-between items-center text-[8px] font-mono-hud text-slate-300 bg-black/70 px-1.5 py-0.5 rounded">
               <span id="cam-hardware-source">SOURCE: CAMERA HD</span>
+              <span id="cam-compass-tag" class="text-cyan-300 font-bold">🧭 0° N [उत्तर]</span>
               <span id="cam-facing-tag">FACING: WORLD/REAR</span>
             </div>
           </div>
@@ -957,42 +958,52 @@
       const btnTele = document.getElementById('mob-tab-telemetry');
       const btnAll = document.getElementById('mob-tab-all');
 
-      const activeStyle = 'border-cyan-400 bg-cyan-950/90 text-cyan-200 shadow-[0_0_10px_rgba(0,240,255,0.3)] font-bold';
-      const inactiveStyle = 'border-slate-700 bg-slate-900/60 text-slate-300 font-normal';
-
-      [btnCam, btnVoice, btnTele, btnAll].forEach(b => {
-        if (b) {
-          b.className = b.className.replace(activeStyle, '').replace(inactiveStyle, '') + ' ' + inactiveStyle;
+      const setTabBtnStyle = (btn, isActive) => {
+        if (!btn) return;
+        if (isActive) {
+          btn.className = 'flex-1 py-2 px-1 rounded-lg border border-cyan-400 bg-cyan-950/90 text-cyan-200 font-bold flex items-center justify-center gap-1 shadow-[0_0_10px_rgba(0,240,255,0.3)] transition active:scale-95';
+        } else {
+          btn.className = 'flex-1 py-2 px-1 rounded-lg border border-slate-700 bg-slate-900/60 text-slate-300 font-normal flex items-center justify-center gap-1 transition active:scale-95';
         }
-      });
+      };
 
       if (window.innerWidth >= 1024) {
         if (leftPanel) leftPanel.style.display = '';
         if (centerPanel) centerPanel.style.display = '';
         if (rightPanel) rightPanel.style.display = '';
+        ensureVideoPlaying();
         return;
       }
 
+      setTabBtnStyle(btnCam, tab === 'camera');
+      setTabBtnStyle(btnVoice, tab === 'voice');
+      setTabBtnStyle(btnTele, tab === 'telemetry');
+      if (btnAll) {
+        btnAll.className = tab === 'all'
+          ? 'py-2 px-2.5 rounded-lg border border-cyan-400 bg-cyan-950/90 text-cyan-200 font-bold flex items-center justify-center gap-1 shadow-[0_0_10px_rgba(0,240,255,0.3)] transition active:scale-95'
+          : 'py-2 px-2.5 rounded-lg border border-slate-700 bg-slate-900/60 text-slate-300 font-normal flex items-center justify-center gap-1 transition active:scale-95';
+      }
+
       if (tab === 'camera') {
-        if (btnCam) btnCam.className = btnCam.className.replace(inactiveStyle, '') + ' ' + activeStyle;
         if (rightPanel) rightPanel.style.display = 'flex';
         if (centerPanel) centerPanel.style.display = 'none';
         if (leftPanel) leftPanel.style.display = 'none';
+        ensureVideoPlaying();
+        if (!jarvisState.cameraStream) initCameraStream();
       } else if (tab === 'voice') {
-        if (btnVoice) btnVoice.className = btnVoice.className.replace(inactiveStyle, '') + ' ' + activeStyle;
         if (rightPanel) rightPanel.style.display = 'none';
         if (centerPanel) centerPanel.style.display = 'flex';
         if (leftPanel) leftPanel.style.display = 'none';
       } else if (tab === 'telemetry') {
-        if (btnTele) btnTele.className = btnTele.className.replace(inactiveStyle, '') + ' ' + activeStyle;
         if (rightPanel) rightPanel.style.display = 'none';
         if (centerPanel) centerPanel.style.display = 'none';
         if (leftPanel) leftPanel.style.display = 'flex';
       } else { // 'all'
-        if (btnAll) btnAll.className = btnAll.className.replace(inactiveStyle, '') + ' ' + activeStyle;
         if (rightPanel) rightPanel.style.display = 'flex';
         if (centerPanel) centerPanel.style.display = 'flex';
         if (leftPanel) leftPanel.style.display = 'flex';
+        ensureVideoPlaying();
+        if (!jarvisState.cameraStream) initCameraStream();
       }
     }
 
@@ -1216,18 +1227,25 @@
             }
           }
 
-          utterance.onend = () => {
+          const approxDurationMs = Math.max(1200, (actualSpeech.length / 10) * 1000);
+          const safetyTimer = setTimeout(() => {
+            if (jarvisState.isSpeaking) {
+              onSpeechFinished();
+            }
+          }, approxDurationMs + 1000);
+
+          function onSpeechFinished() {
+            clearTimeout(safetyTimer);
             activeUtterance = null;
             setSpeakingState(false);
             stopVoiceBarsAnimation();
-            setTimeout(() => duckMicrophone(false), 200);
-          };
+            duckMicrophone(false);
+          }
+
+          utterance.onend = onSpeechFinished;
           utterance.onerror = (err) => {
             console.warn('Speech error:', err);
-            activeUtterance = null;
-            setSpeakingState(false);
-            stopVoiceBarsAnimation();
-            setTimeout(() => duckMicrophone(false), 200);
+            onSpeechFinished();
           };
 
           window.speechSynthesis.speak(utterance);
@@ -1289,6 +1307,9 @@
     /* -------------------------------------------------------------
        4. HANDS-FREE CONTINUOUS SPEECH RECOGNITION (NO TOUCH REQUIRED)
        ------------------------------------------------------------- */
+    let speechRestartTimer = null;
+    let speechPermissionDenied = false;
+
     function initContinuousSpeechRecognition() {
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
       const micIndicator = document.getElementById('mic-live-indicator');
@@ -1305,16 +1326,18 @@
         const rec = new SpeechRecognition();
         rec.continuous = true;
         rec.interimResults = true;
+        rec.maxAlternatives = 1;
         rec.lang = jarvisState.language === 'hi' ? 'hi-IN' : 'en-IN';
 
         rec.onstart = () => {
           jarvisState.isListening = true;
+          speechPermissionDenied = false;
           document.body.classList.add('is-listening');
           updateMicUI(true);
         };
 
         rec.onresult = (event) => {
-          if (jarvisState.isDucked) return; // Discard phone's own speaker audio
+          if (jarvisState.isDucked || jarvisState.isSpeaking) return; // Drop Jarvis TTS playback feedback
 
           const results = event.results;
           const lastResult = results[results.length - 1];
@@ -1329,22 +1352,32 @@
         };
 
         rec.onerror = (e) => {
-          console.warn('Speech recognition error:', e.error);
-          if (e.error === 'not-allowed') {
-            if (micIndicator) micIndicator.innerText = 'MIC BLOCKED (Allow permissions in browser)';
+          console.warn('Speech recognition status:', e.error);
+          if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+            speechPermissionDenied = true;
+            if (micIndicator) micIndicator.innerText = 'MIC BLOCKED (Tap center circle to allow)';
             if (micDot) micDot.className = 'w-2.5 h-2.5 rounded-full bg-red-500';
+            updateMicUI(false);
+          } else if (e.error === 'no-speech' || e.error === 'aborted') {
+            // Normal pause in user speaking; will auto-resume in onend
           } else if (e.error === 'network') {
-            if (micIndicator) micIndicator.innerText = 'SPEECH OFFLINE (Use input bar below)';
+            if (micIndicator) micIndicator.innerText = 'SPEECH OFFLINE (Tap mic or use input)';
           }
         };
 
         rec.onend = () => {
           jarvisState.isListening = false;
-          // Automatically reconnect unless ducked for speaking
-          if (jarvisState.isAutoListeningActive && !jarvisState.isDucked) {
-            setTimeout(() => {
-              try { rec.start(); } catch (_) {}
-            }, 150);
+          document.body.classList.remove('is-listening');
+          // Automatically reconnect unless user explicitly stopped or permission was denied
+          if (jarvisState.isAutoListeningActive && !speechPermissionDenied) {
+            clearTimeout(speechRestartTimer);
+            speechRestartTimer = setTimeout(() => {
+              if (jarvisState.isAutoListeningActive && !jarvisState.isListening && !speechPermissionDenied) {
+                try { rec.start(); } catch (_) {}
+              }
+            }, 250);
+          } else {
+            updateMicUI(false);
           }
         };
 
@@ -1356,10 +1389,26 @@
 
     function duckMicrophone(duck) {
       jarvisState.isDucked = duck;
-      if (duck && jarvisState.recognition) {
-        try { jarvisState.recognition.abort(); } catch (_) {}
-      } else if (!duck && jarvisState.isAutoListeningActive && jarvisState.recognition) {
+      // Soft ducking: never call recognition.abort() on mobile devices, which kills Web Speech API.
+      // Audio is filtered out in onresult while isDucked is true.
+      if (!duck && jarvisState.isAutoListeningActive && jarvisState.recognition && !jarvisState.isListening) {
         try { jarvisState.recognition.start(); } catch (_) {}
+      }
+    }
+
+    function startMicUserGesture() {
+      speechPermissionDenied = false;
+      jarvisState.isAutoListeningActive = true;
+      jarvisState.isDucked = false;
+      getAudioCtx();
+      if (!jarvisState.recognition) {
+        initContinuousSpeechRecognition();
+      }
+      if (jarvisState.recognition) {
+        try {
+          jarvisState.recognition.start();
+        } catch (_) {}
+        updateMicUI(true);
       }
     }
 
@@ -1375,8 +1424,9 @@
       getAudioCtx();
       playStarkChime('listen-start');
       activateJarvisVoiceMatrix();
+      startMicUserGesture();
       initCameraStream();
-      initMotionSensors();
+      requestSensorPermissions();
       startRouteRecording();
     }
 
@@ -1408,35 +1458,31 @@
       const micDot = document.getElementById('mic-status-dot');
 
       if (isActive) {
-        if (micLabel) micLabel.innerText = 'MIC: CONTINUOUS';
+        if (micLabel) micLabel.innerText = 'MIC: LIVE';
         if (btnTalkText) btnTalkText.innerText = 'HANDS-FREE ACTIVE (SPEAK FREELY)';
         if (modeTag) modeTag.innerText = 'JARVIS HANDS-FREE // LISTENING AUTOMATICALLY';
         if (micIndicator) micIndicator.innerText = 'MIC: LISTENING LIVE (SPEAK FREELY)';
         if (micDot) micDot.className = 'w-2.5 h-2.5 rounded-full bg-cyan-400 animate-ping';
       } else {
         if (micLabel) micLabel.innerText = 'VOICE READY';
-        if (btnTalkText) btnTalkText.innerText = 'ACTIVATE VOICE MATRIX';
-        if (micIndicator) micIndicator.innerText = 'MIC: STANDBY (CLICK TO WAKE)';
+        if (btnTalkText) btnTalkText.innerText = 'TAP TO SPEAK (TOUCH-TO-TALK)';
+        if (micIndicator) micIndicator.innerText = 'MIC: STANDBY (TAP TO WAKE)';
         if (micDot) micDot.className = 'w-2.5 h-2.5 rounded-full bg-slate-500';
       }
     }
 
     function handleCentralCircleClick() {
-      if (!jarvisState.isAutoListeningActive) {
-        activateJarvisVoiceMatrix();
-      } else {
-        // Quick trigger scene analysis
-        triggerSceneQuery();
-      }
+      triggerHaptic('tap');
+      // Push-to-talk user gesture guarantees mic activates on mobile phones
+      startMicUserGesture();
+      playStarkChime('ack');
+      triggerSceneQuery();
     }
 
     function toggleListeningState() {
-      if (!jarvisState.isAutoListeningActive) {
-        activateJarvisVoiceMatrix();
-      } else {
-        // Force manual query
-        triggerSceneQuery();
-      }
+      triggerHaptic('tap');
+      startMicUserGesture();
+      playStarkChime('listen-start');
     }
 
     /**
@@ -2271,6 +2317,30 @@
           this.cardinalEn = "NORTH-WEST";
           this.cardinalHi = "उत्तर-पश्चिम";
         }
+
+        // Real-Time Direction & Compass Display updates across HUD
+        const roundDeg = Math.round(this.headingDeg);
+        const compassText = `🧭 ${roundDeg}° ${this.cardinalEn} [${this.cardinalHi}]`;
+
+        const camCompass = document.getElementById('cam-compass-tag');
+        if (camCompass) camCompass.innerText = compassText;
+
+        const radarCompass = document.getElementById('radar-compass-readout');
+        if (radarCompass) radarCompass.innerText = compassText;
+
+        const dirEl = document.getElementById('front-obj-direction');
+        if (dirEl && (!dirEl.dataset.overridden || dirEl.dataset.overridden === 'false')) {
+          dirEl.innerText = `STRAIGHT [${this.cardinalEn} ${roundDeg}°]`;
+        }
+
+        const radarBlip = document.getElementById('radar-blip');
+        if (radarBlip) {
+          const rad = (this.headingDeg - 90) * Math.PI / 180;
+          const bx = 80 + Math.cos(rad) * 32;
+          const by = 48 + Math.sin(rad) * 22;
+          radarBlip.setAttribute('cx', bx.toFixed(1));
+          radarBlip.setAttribute('cy', by.toFixed(1));
+        }
       },
 
       getRelativeCardinal(offsetDeg) {
@@ -2282,19 +2352,66 @@
       }
     };
 
-    if (typeof window !== 'undefined' && window.DeviceOrientationEvent) {
-      window.addEventListener('deviceorientation', (e) => {
+    function attachDeviceOrientationListeners() {
+      const handleOrientation = (e) => {
         let heading = null;
         if (e.webkitCompassHeading !== undefined && e.webkitCompassHeading !== null) {
+          // iOS WebKit compass heading (magnetic true North)
           heading = e.webkitCompassHeading;
+        } else if (e.absolute === true || e.type === 'deviceorientationabsolute') {
+          // Android absolute compass heading
+          if (e.alpha !== null && e.alpha !== undefined) {
+            heading = (360 - e.alpha) % 360;
+          }
         } else if (e.alpha !== null && e.alpha !== undefined) {
+          // Fallback relative heading
           heading = (360 - e.alpha) % 360;
         }
+
         if (heading !== null && !isNaN(heading)) {
           compassEngine.hasCompass = true;
           compassEngine.updateHeading(heading);
         }
-      }, true);
+      };
+
+      if ('ondeviceorientationabsolute' in window) {
+        window.addEventListener('deviceorientationabsolute', handleOrientation, true);
+      }
+      window.addEventListener('deviceorientation', handleOrientation, true);
+    }
+
+    async function requestSensorPermissions() {
+      // 1. iOS 13+ DeviceOrientation permission
+      if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+        try {
+          const perm = await DeviceOrientationEvent.requestPermission();
+          if (perm === 'granted') {
+            attachDeviceOrientationListeners();
+          }
+        } catch (err) {
+          console.warn('Orientation permission error:', err);
+        }
+      } else {
+        attachDeviceOrientationListeners();
+      }
+
+      // 2. iOS 13+ DeviceMotion permission
+      if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+        try {
+          const mPerm = await DeviceMotionEvent.requestPermission();
+          if (mPerm === 'granted') {
+            attachDeviceMotionListener();
+          }
+        } catch (err) {
+          console.warn('Motion permission error:', err);
+        }
+      } else {
+        attachDeviceMotionListener();
+      }
+    }
+
+    if (typeof window !== 'undefined') {
+      attachDeviceOrientationListeners();
     }
 
     function getSimpleDirection(normX) {
@@ -2434,10 +2551,10 @@
         // 2. Darkness / Eclipsed Lens: Hand/cloth covering lens cuts out light (meanLum < 32)
         // 3. Human Skin Covering Lens: skinRatio > 0.35 AND out-of-focus blur (avgGrad < 9.5)
         // 4. Uniform Paper/Cloth on Lens: stdDev < 9.5 and avgGrad < 5.5
-        const isSkinCovering = (skinRatio > 0.35 && avgGrad < 9.5);
-        const isDarkCovering = (meanLum < 32);
-        const isFlatSurfaceOnLens = (stdDev < 9.5 && avgGrad < 5.5);
-        const isOverexposedCovering = (meanLum > 242 && stdDev < 8.0);
+        const isSkinCovering = (skinRatio > 0.45 && avgGrad < 4.0);
+        const isDarkCovering = (meanLum < 8 && stdDev < 4.0 && avgGrad < 2.0);
+        const isFlatSurfaceOnLens = (stdDev < 5.0 && avgGrad < 3.0 && meanLum < 120);
+        const isOverexposedCovering = (meanLum > 250 && stdDev < 5.0);
 
         const isLensOccluded = isSkinCovering || isDarkCovering || isFlatSurfaceOnLens || isOverexposedCovering;
 
@@ -3587,9 +3704,11 @@
 
     function renderOpticalVisionCanvas() {
       if (!camCanvas || !camCtx) return;
-      if (camCanvas.width === 0 || camCanvas.height === 0 || camCanvas.width !== camCanvas.clientWidth) {
-        camCanvas.width = camCanvas.clientWidth || 320;
-        camCanvas.height = camCanvas.clientHeight || 192;
+      const targetW = Math.round(camCanvas.clientWidth) || 320;
+      const targetH = Math.round(camCanvas.clientHeight) || 192;
+      if (Math.abs(camCanvas.width - targetW) > 2 || Math.abs(camCanvas.height - targetH) > 2) {
+        camCanvas.width = targetW;
+        camCanvas.height = targetH;
       }
       const w = camCanvas.width;
       const h = camCanvas.height;
@@ -3597,15 +3716,15 @@
       const video = document.getElementById('device-camera-video');
       const hasStream = !!(jarvisState.cameraStream && video && video.srcObject);
 
+      // Always clear transparent so native hardware video displays underneath without obstruction
+      camCtx.clearRect(0, 0, w, h);
+
       if (hasStream) {
         // Active camera stream: automatically resume play if paused
         if (video.paused) {
           video.muted = true;
           video.play().catch(() => {});
         }
-
-        // Keep canvas transparent so hardware-accelerated video underneath displays cleanly
-        camCtx.clearRect(0, 0, w, h);
 
         // Also draw current video frame onto canvas when ready for pixel-perfect HUD alignment
         if (video.videoWidth > 0 && !video.paused) {
@@ -3616,8 +3735,8 @@
           camCtx.fillRect(0, 0, w, h);
         }
       } else {
-        // Perspective Cyber Corridor ONLY when there is TRULY NO active camera stream
-        camCtx.fillStyle = '#020713';
+        // Semi-transparent Cyber Corridor ONLY when there is NO active camera stream
+        camCtx.fillStyle = 'rgba(2, 7, 19, 0.75)';
         camCtx.fillRect(0, 0, w, h);
 
         corridorZ = (corridorZ + 1.2) % 36;
@@ -4551,34 +4670,40 @@
       document.getElementById('live-clock').innerText = now.toTimeString().split(' ')[0] + ' UTC';
     }
 
-    // First interaction anywhere on screen unlocks camera, resumes video, activates wake lock & launches hands-free listening
+    // First interaction anywhere on screen unlocks camera, resumes video, activates wake lock, requests sensors & starts mic
     window.addEventListener('click', (e) => {
       ensureVideoPlaying();
       requestMobileWakeLock();
+      requestSensorPermissions();
       if (!jarvisState.cameraStream) {
         initCameraStream();
       }
       if (!jarvisState.isAutoListeningActive) {
-        activateJarvisVoiceMatrix();
+        startMicUserGesture();
       }
     });
 
-    window.addEventListener('touchstart', (e) => {
+    window.addEventListener('touchend', (e) => {
       ensureVideoPlaying();
       requestMobileWakeLock();
+      requestSensorPermissions();
       if (!jarvisState.cameraStream) {
         initCameraStream();
       }
-    }, { passive: true });
+      if (!jarvisState.isAutoListeningActive) {
+        startMicUserGesture();
+      }
+    });
 
     window.addEventListener('keydown', (e) => {
       ensureVideoPlaying();
       requestMobileWakeLock();
+      requestSensorPermissions();
       if (!jarvisState.cameraStream) {
         initCameraStream();
       }
       if (!jarvisState.isAutoListeningActive) {
-        activateJarvisVoiceMatrix();
+        startMicUserGesture();
         return;
       }
       if (e.code === 'Space' && e.target === document.body) {
