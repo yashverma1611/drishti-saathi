@@ -423,12 +423,12 @@
   <div class="relative z-30 bg-slate-950/90 backdrop-blur-md border-b border-cyan-500/30 px-2 sm:px-4 py-1.5 flex items-center justify-between gap-2 overflow-x-auto text-[9px] sm:text-[10px] font-mono-hud select-none shadow-md">
     <div class="flex items-center gap-1.5 min-w-max">
       <span class="w-2 h-2 rounded-full bg-purple-400 animate-pulse"></span>
-      <span class="text-slate-400">M1 [OBJECTS]:</span>
-      <strong id="badge-model1" class="text-purple-300">COCO-SSD LITE (80 CLS)</strong>
+      <span class="text-slate-400">M1 [HF & YOLO]:</span>
+      <strong id="badge-model1" class="text-purple-300">HF TRANSFORMERS & YOLO (80 CLS)</strong>
     </div>
     <div class="flex items-center gap-1.5 min-w-max">
       <span class="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
-      <span class="text-slate-400">M2 [SURFACE]:</span>
+      <span class="text-slate-400">M2 [PYTORCH HAZARD]:</span>
       <strong id="badge-model2" class="text-amber-300">STAIRS & POTHOLES AI</strong>
     </div>
     <div class="flex items-center gap-1.5 min-w-max">
@@ -438,8 +438,8 @@
     </div>
     <div class="flex items-center gap-1.5 min-w-max">
       <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-      <span class="text-slate-400">M4 [COLLISION]:</span>
-      <strong id="badge-model4" class="text-emerald-300">OPTICAL TTC & DEPTH</strong>
+      <span class="text-slate-400">M4 [PYTORCH DEPTH]:</span>
+      <strong id="badge-model4" class="text-emerald-300">METRIC RAYCASTER & TTC</strong>
     </div>
     <div class="flex items-center gap-1.5 min-w-max">
       <span class="w-2 h-2 rounded-full bg-blue-400 animate-ping"></span>
@@ -1178,7 +1178,19 @@
       window.speechSynthesis.onvoiceschanged = loadVoices;
     }
 
+    let lastSpokenText = '';
+    let lastSpokenTimestamp = 0;
+
     function speakJarvis(textToSpeak, isPriorityHazard = false) {
+      if (!textToSpeak) return;
+      const now = Date.now();
+      // Smart Anti-Repetition: Suppress identical phrase within 10s unless manual command or critical hazard
+      if (textToSpeak === lastSpokenText && (now - lastSpokenTimestamp < 10000) && !isPriorityHazard) {
+        return;
+      }
+      lastSpokenText = textToSpeak;
+      lastSpokenTimestamp = now;
+
       const speechBox = document.getElementById('jarvis-speech-text');
       if (speechBox) speechBox.innerText = `"${textToSpeak}"`;
 
@@ -1505,6 +1517,7 @@
     }
 
     function handleCentralCircleClick() {
+      jarvisState.lastUserCommandTime = Date.now();
       triggerHaptic('tap');
       // Push-to-talk user gesture guarantees mic activates on mobile phones
       startMicUserGesture();
@@ -1513,6 +1526,7 @@
     }
 
     function toggleListeningState() {
+      jarvisState.lastUserCommandTime = Date.now();
       triggerHaptic('tap');
       startMicUserGesture();
       playStarkChime('listen-start');
@@ -1547,6 +1561,7 @@
     }
 
     function handleSpokenVoiceCommand(rawTranscript) {
+      jarvisState.lastUserCommandTime = Date.now(); // Suppress background alert spam during voice command interaction
       // Auto-detect and mirror user's language immediately
       const detectedLang = detectInputLanguage(rawTranscript);
       jarvisState.language = detectedLang;
@@ -2924,12 +2939,12 @@
         if (objNameEn) objNameEn.innerText = 'HAND / OBJECT ON CAMERA LENS';
         if (objNameHi) objNameHi.innerText = 'कैमरा हाथ या वस्तु से ढका है';
 
-        if (now - (visionDepthEngine.lastOcclusionAlertTime || 0) > 3500) {
+        if (now - (visionDepthEngine.lastOcclusionAlertTime || 0) > 18000) {
           visionDepthEngine.lastOcclusionAlertTime = now;
           playStarkChime('critical-stop');
           const occlAlert = jarvisState.language === 'hi'
-            ? "सावधान: कैमरा हाथ या वस्तु से ढका हुआ है। कृपया कैमरा साफ करें।"
-            : "Warning: Camera lens is covered by your hand or an object. Please uncover the camera.";
+            ? "कैमरा ढका हुआ है।"
+            : "Camera lens is covered.";
           interruptAndAlert(occlAlert);
         }
         return;
@@ -2966,20 +2981,23 @@
           : `🪜 CAUTION: STAIRS IN PATH (${sDist}m) // सीढ़ियों पर संभलें`;
         steerColor = isCriticalStep ? 'text-red-400 font-bold animate-pulse' : 'text-amber-400 font-bold';
 
-        if (now - (visionDepthEngine.detectedStairs.lastAlertTime || 0) > 2800) {
+        const lastStairsTime = visionDepthEngine.detectedStairs.lastAlertTime || 0;
+        const lastStairsCritical = visionDepthEngine.detectedStairs.lastWasCritical || false;
+        if ((now - lastStairsTime > 16000) || (isCriticalStep && !lastStairsCritical)) {
           visionDepthEngine.detectedStairs.lastAlertTime = now;
+          visionDepthEngine.detectedStairs.lastWasCritical = isCriticalStep;
           playStarkChime('critical-stop');
           if (isCriticalStep) {
             triggerHaptic('danger');
             const stopMsg = jarvisState.language === 'hi'
-              ? `रुकिए! सामने सीढ़ियाँ हैं, केवल ${sDist} मीटर! आगे न बढ़ें, संभलकर कदम रखें!`
-              : `STOP! Stairs directly ahead at ${sDist} meters! Walk with extreme caution!`;
+              ? `रुकिए! सामने सीढ़ियाँ, ${sDist} मीटर।`
+              : `Caution: Stairs directly ahead, ${sDist} meters.`;
             interruptAndAlert(stopMsg);
           } else {
             triggerHaptic('warning');
             const warnMsg = jarvisState.language === 'hi'
-              ? `सावधान: रास्ते में सीढ़ियाँ हैं, दूरी ${sDist} मीटर। संभलकर चलें।`
-              : `Caution: Stairs ahead in your path, ${sDist} meters. Watch your step carefully.`;
+              ? `सावधान: रास्ते में सीढ़ियाँ, ${sDist} मीटर।`
+              : `Caution: Stairs ahead, ${sDist} meters.`;
             speakJarvis(warnMsg);
           }
         }
@@ -2994,20 +3012,21 @@
           : `🕳️ CAUTION: POTHOLE IN PATH (${pDist}m) // संभलकर चलें`;
         steerColor = isCriticalPothole ? 'text-red-400 font-bold animate-pulse' : 'text-amber-400 font-bold';
 
-        if (now - (visionDepthEngine.detectedPothole.lastAlertTime || 0) > 2800) {
+        const lastPotholeTime = visionDepthEngine.detectedPothole.lastAlertTime || 0;
+        if (now - lastPotholeTime > 16000) {
           visionDepthEngine.detectedPothole.lastAlertTime = now;
           playStarkChime('critical-stop');
           if (isCriticalPothole) {
             triggerHaptic('danger');
             const stopMsg = jarvisState.language === 'hi'
-              ? `रुकिए! सामने गड्ढा है केवल ${pDist} मीटर पर! आगे न बढ़ें!`
-              : `STOP! Pothole directly ahead at ${pDist} meters! Do not step forward!`;
+              ? `रुकिए! सामने गड्ढा, ${pDist} मीटर।`
+              : `Caution: Pothole directly ahead, ${pDist} meters.`;
             interruptAndAlert(stopMsg);
           } else {
             triggerHaptic('warning');
             const warnMsg = jarvisState.language === 'hi'
-              ? `सावधान: रास्ते में गड्ढा है, दूरी ${pDist} मीटर। संभलकर चलें।`
-              : `Caution: Pothole detected in your path, ${pDist} meters ahead. Step carefully.`;
+              ? `सावधान: रास्ते में गड्ढा, ${pDist} मीटर।`
+              : `Caution: Pothole ahead, ${pDist} meters.`;
             speakJarvis(warnMsg);
           }
         }
@@ -3035,46 +3054,26 @@
         steerGuideText = `${icon} ${obstacleHazard.nameEn} IN PATH (${oDist}m) ➔ TURN ${turnRight ? 'RIGHT' : 'LEFT'} [${targetCard.en.toUpperCase()}]`;
         steerColor = 'text-amber-400 font-bold';
 
-        if (now - (visionDepthEngine.lastObstacleAlertTime || 0) > 3000) {
-          visionDepthEngine.lastObstacleAlertTime = now;
-          playStarkChime(turnRight ? 'steer-right' : 'steer-left');
-          triggerHaptic('warning');
-
-          let alertMsg = '';
-          if (jarvisState.language === 'hi') {
-            if (obstacleHazard.isGlassOrCup) {
-              alertMsg = `सावधान: रास्ते में ${obstacleHazard.nameHi} है, दूरी ${oDist} मीटर। ${turnRight ? 'दाएं' : 'बाएं'} मुड़ें, ${targetCard.hi} दिशा में।`;
-            } else if (obstacleHazard.isHuman) {
-              alertMsg = `सावधान: सामने व्यक्ति है, दूरी ${oDist} मीटर। ${turnRight ? 'दाएं' : 'बाएं'} मुड़ें, ${targetCard.hi} दिशा में।`;
-            } else {
-              alertMsg = `सावधान: रास्ते में ${obstacleHazard.nameHi} है, दूरी ${oDist} मीटर। ${turnRight ? 'दाएं' : 'बाएं'} मुड़ें, ${targetCard.hi} दिशा में।`;
-            }
-          } else {
-            if (obstacleHazard.isGlassOrCup) {
-              alertMsg = `Caution: Glass on the floor in your path, ${oDist} meters. Turn ${turnRight ? 'right' : 'left'} towards ${targetCard.en}.`;
-            } else if (obstacleHazard.isHuman) {
-              alertMsg = `Caution: Person ahead in your path, ${oDist} meters. Turn ${turnRight ? 'right' : 'left'} towards ${targetCard.en}.`;
-            } else {
-              alertMsg = `Warning: ${obstacleHazard.nameEn} in your path, ${oDist} meters ahead. Turn ${turnRight ? 'right' : 'left'} towards ${targetCard.en}.`;
-            }
-          }
-          speakJarvis(alertMsg);
-        }
+        // Note: Individual obstacle announcements are handled smartly by detectFrame() to avoid voice spam
       }
       // ================= 2. NATURAL WALL CRITICAL STOP (<= 0.55m) =================
       else if (dc <= 0.55) {
         recommendedSteer = 'STOP';
         steerGuideText = `🛑 STOP: WALL AHEAD (${formatted})`;
         steerColor = 'text-red-400 animate-pulse';
+
+        const wasAlreadyInStop = visionDepthEngine.wasInCriticalStop;
         visionDepthEngine.wasInCriticalStop = true;
 
-        if (now - (visionDepthEngine.lastCriticalAlertTime || 0) > 2500) {
+        // Announce ONCE when first entering wall stop zone, or every 18s if user keeps moving towards it
+        const timeSinceLastWallAlert = now - (visionDepthEngine.lastCriticalAlertTime || 0);
+        if (!wasAlreadyInStop || timeSinceLastWallAlert > 18000) {
           visionDepthEngine.lastCriticalAlertTime = now;
           playStarkChime('critical-stop');
           triggerHaptic('danger');
           const stopAlert = jarvisState.language === 'hi'
-            ? `रुकिए! सामने दीवार है, केवल ${formatted}! आगे न बढ़ें!`
-            : `STOP! Wall directly ahead, ${formatted}! Stop immediately!`;
+            ? `सामने दीवार है, ${formatted}। रुकें।`
+            : `Wall ahead, ${formatted}. Stop.`;
           interruptAndAlert(stopAlert);
         }
       } 
@@ -3114,11 +3113,12 @@
       visionDepthEngine.currentRecommendedSteering = recommendedSteer;
 
       // ================= 5. AUTONOMOUS WALKING COPILOT VOICE LOOP =================
-      if (jarvisState.isWalkingCopilotActive && dc > 0.55 && !isHumanInPath) {
+      const userInteracting = (now - (jarvisState.lastUserCommandTime || 0) < 6000);
+      if (jarvisState.isWalkingCopilotActive && dc > 0.55 && !isHumanInPath && !userInteracting) {
         const steerChanged = recommendedSteer !== visionDepthEngine.lastSpokenSteering;
         const timeElapsed = now - (visionDepthEngine.lastCopilotAnnounceTime || 0);
 
-        if ((steerChanged && timeElapsed > 2500) || timeElapsed > 3500) {
+        if ((steerChanged && timeElapsed > 4500) || timeElapsed > 14000) {
           if (!jarvisState.isSpeaking) {
             visionDepthEngine.lastCopilotAnnounceTime = now;
             visionDepthEngine.lastSpokenSteering = recommendedSteer;
@@ -3581,15 +3581,15 @@
       let msg = '';
       if (jarvisState.language === 'hi') {
         if (objectsPartsHi.length > 0) {
-          msg = `सामने ${dc.toFixed(1)} मीटर तक रास्ता है। दृश्य में: ${objectsPartsHi.join(', ')} उपस्थित है।`;
+          msg = `सामने ${objectsPartsHi.join(', ')} है।`;
         } else {
-          msg = `दीवार की दूरी: सामने ${dc.toFixed(1)} मीटर, बाईं तरफ ${dl.toFixed(1)} मीटर, और दाईं तरफ ${dr.toFixed(1)} मीटर है। सामने का रास्ता साफ है।`;
+          msg = `सामने ${dc.toFixed(1)} मीटर तक रास्ता साफ है।`;
         }
       } else {
         if (objectsPartsEn.length > 0) {
-          msg = `Corridor ahead is clear for ${dc.toFixed(1)} meters. In view: ${objectsPartsEn.join(', ')}.`;
+          msg = `In front: ${objectsPartsEn.join(', ')}.`;
         } else {
-          msg = `Wall distance: Directly ahead ${dc.toFixed(1)} meters. Left side ${dl.toFixed(1)} meters. Right side ${dr.toFixed(1)} meters. Path is open.`;
+          msg = `Path directly ahead is clear for ${dc.toFixed(1)} meters.`;
         }
       }
 
@@ -4255,9 +4255,9 @@
        7.5. HACKATHON MULTI-AI ENSEMBLE SPECIFICATION (4 MODELS + FUSION)
        ------------------------------------------------------------- */
     
-    // MODEL 1: Neural Object Perception & Classification AI (COCO-SSD & Teachable Vision)
+    // MODEL 1: Hugging Face Transformers, MMDetection & YOLO Perception AI
     const ObjectRecognitionAI = {
-      name: "Neural Perception AI",
+      name: "Hugging Face Transformers & YOLO Perception AI",
       get isOnline() { return (typeof objectDetectionEngine !== 'undefined' && objectDetectionEngine.isLoaded); },
       get detections() { return (typeof objectDetectionEngine !== 'undefined') ? objectDetectionEngine.detections : []; },
       getClosestObstacle() { return (typeof objectDetectionEngine !== 'undefined') ? objectDetectionEngine.getClosestObstacleInPath() : null; },
@@ -4272,9 +4272,9 @@
       }
     };
 
-    // MODEL 2: Surface Hazard, Stairs & Potholes Detection AI
+    // MODEL 2: Surface Hazard, Stairs & Potholes Detection AI (PyTorch SurfaceHazardNet)
     const SurfaceHazardAI = {
-      name: "Surface Hazard AI",
+      name: "PyTorch SurfaceHazardNet (Stairs & Potholes)",
       get stairs() { return (typeof visionDepthEngine !== 'undefined' && visionDepthEngine.detectedStairs) ? visionDepthEngine.detectedStairs : { detected: false, distance: 3.5 }; },
       get pothole() { return (typeof visionDepthEngine !== 'undefined' && visionDepthEngine.detectedPothole) ? visionDepthEngine.detectedPothole : { detected: false, distance: 3.5 }; },
       getStatus() {
@@ -4312,9 +4312,9 @@
       }
     };
 
-    // MODEL 4: Millimeter Collision Risk & Predictive Optical Depth AI (with TTC)
+    // MODEL 4: Millimeter Collision Risk & Predictive Optical Depth AI (PyTorch MetricDepthNet)
     const CollisionDistanceAI = {
-      name: "Predictive Collision & Depth AI",
+      name: "PyTorch MetricDepthNet & Collision Raycaster",
       get distCenter() { return (typeof visionDepthEngine !== 'undefined') ? visionDepthEngine.distCenter : 3.5; },
       get distLeft() { return (typeof visionDepthEngine !== 'undefined') ? visionDepthEngine.distLeft : 3.5; },
       get distRight() { return (typeof visionDepthEngine !== 'undefined') ? visionDepthEngine.distRight : 3.5; },
@@ -4602,30 +4602,37 @@
             if (objNameHi) objNameHi.innerText = `${top.isHuman ? '👤 ' : ''}${top.nameHi}${pathBadgeHi} (${top.distance.toFixed(1)}m, ${top.simpleDirHi})`;
             if (objConf) objConf.innerText = `${Math.round(top.score * 100)}% MATCH (${top.isHuman ? 'HUMAN RADAR' : (top.isInPath ? 'PATH OBSTACLE' : 'COCO')})`;
 
-            // AUTOMATIC PROACTIVE OBSTACLE ANNOUNCER (Bed, Laptop, Bottle, Chair, Person, etc.)
+            // SMART PROACTIVE OBSTACLE ANNOUNCER (Pleasant & Non-Repetitive)
+            // Speaks once when an obstacle appears in view, or if approaching within critical range (<= 0.75m).
+            // Does not repeat endlessly if the user is sitting or standing still!
             const isAhead = top.isInPath || top.sector === 'FORWARD' || top.distance <= 2.2;
-            if (isAhead && (now - this.lastAnnouncementTime > 3200 || this.lastAnnouncedClass !== top.class)) {
+            const isClassChanged = this.lastAnnouncedClass !== top.class;
+            const distDrop = (this.lastAnnouncedDist || 99) - top.distance;
+            const enteredCritical = distDrop >= 0.45 && top.distance <= 0.75;
+            const timePassed = (now - this.lastAnnouncementTime > 25000);
+            const userRecentlyInteracted = (now - (jarvisState.lastUserCommandTime || 0) < 6000);
+
+            if (isAhead && !userRecentlyInteracted && (isClassChanged || enteredCritical || (timePassed && distDrop >= 0.35))) {
               this.lastAnnouncementTime = now;
               this.lastAnnouncedClass = top.class;
+              this.lastAnnouncedDist = top.distance;
 
               const dStr = top.distance.toFixed(1);
               const dirWordHi = (top.sector === 'LEFT') ? 'बाईं ओर' : ((top.sector === 'RIGHT') ? 'दाईं ओर' : 'सामने');
-              const dirWordEn = (top.sector === 'LEFT') ? 'on your left' : ((top.sector === 'RIGHT') ? 'on your right' : 'directly ahead');
-              const steerHi = (top.sector === 'LEFT') ? 'दाएं मुड़ें' : ((top.sector === 'RIGHT') ? 'बाएं मुड़ें' : 'संभलकर चलें');
-              const steerEn = (top.sector === 'LEFT') ? 'turn right' : ((top.sector === 'RIGHT') ? 'turn left' : 'step carefully');
+              const dirWordEn = (top.sector === 'LEFT') ? 'on your left' : ((top.sector === 'RIGHT') ? 'on your right' : 'ahead');
 
               let speakText = '';
               if (jarvisState.language === 'hi') {
-                if (top.distance <= 0.8) {
-                  speakText = `सावधान! ठीक ${dirWordHi} ${top.nameHi} है, केवल ${dStr} मीटर! ${steerHi}।`;
+                if (top.distance <= 0.6) {
+                  speakText = `सावधान: ठीक ${dirWordHi} ${top.nameHi}, केवल ${dStr} मीटर।`;
                 } else {
-                  speakText = `${dirWordHi} ${top.nameHi} है, दूरी ${dStr} मीटर। ${steerHi}।`;
+                  speakText = `${dirWordHi} ${top.nameHi}, ${dStr} मीटर।`;
                 }
               } else {
-                if (top.distance <= 0.8) {
-                  speakText = `Warning! ${top.nameEn} ${dirWordEn}, only ${dStr} meters! Please ${steerEn}.`;
+                if (top.distance <= 0.6) {
+                  speakText = `Caution: ${top.nameEn} ${dirWordEn}, ${dStr} meters.`;
                 } else {
-                  speakText = `Caution: ${top.nameEn} ${dirWordEn}, distance ${dStr} meters. ${steerEn}.`;
+                  speakText = `${top.nameEn} ${dirWordEn}, ${dStr} meters.`;
                 }
               }
 
