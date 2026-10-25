@@ -2,11 +2,20 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#020612">
+  <meta name="format-detection" content="telephone=no">
   <title>Drishti Saathi // Neural AI Interface</title>
   
   <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- Edge Neural Object Detection (TensorFlow.js + COCO-SSD) -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3"></script>
   
   <!-- Futuristic Typography -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -42,12 +51,20 @@
       font-family: 'Rajdhani', sans-serif;
       margin: 0;
       padding: 0;
-      height: 100vh;
+      min-height: 100vh;
+      min-height: 100dvh;
       width: 100vw;
-      overflow: hidden;
+      overflow-x: hidden;
+      overflow-y: auto;
       display: flex;
       flex-direction: column;
-      justify-content: space-between;
+      justify-content: flex-start;
+      -webkit-overflow-scrolling: touch;
+      padding-bottom: max(14px, env(safe-area-inset-bottom));
+    }
+
+    button, input, select, textarea, [role="button"] {
+      touch-action: manipulation;
     }
 
     .font-hud {
@@ -236,38 +253,129 @@
     </div>
   </div>
 
+  <!-- ================= TEACHABLE VISION MODAL ("दृष्टि सीखो") ================= -->
+  <div id="teachable-vision-modal" class="fixed inset-0 z-50 bg-[#020612]/95 backdrop-blur-md flex items-center justify-center p-4 hidden select-none">
+    <div class="relative w-full max-w-lg silver-panel p-5 rounded-2xl border border-purple-500/50 shadow-[0_0_40px_rgba(168,85,247,0.3)] flex flex-col max-h-[92vh]">
+      
+      <!-- Modal Header -->
+      <div class="flex items-center justify-between border-b border-slate-700/80 pb-3 mb-3">
+        <div class="flex items-center gap-2.5">
+          <span class="w-3 h-3 rounded-full bg-purple-400 animate-pulse"></span>
+          <div>
+            <h3 class="font-hud text-sm sm:text-base font-black text-white tracking-widest uppercase flex items-center gap-2">
+              <span>TEACHABLE VISION</span>
+              <span class="text-[10px] text-purple-300 bg-purple-950/80 px-2 py-0.5 rounded border border-purple-400/40 font-mono-hud">दृष्टि सीखो</span>
+            </h3>
+            <p class="font-mono-hud text-[10px] text-slate-300">
+              TRAIN DRISHTI SAATHI TO RECOGNIZE YOUR PERSONAL ITEMS
+            </p>
+          </div>
+        </div>
+        <button onclick="closeTeachableModal()" class="w-8 h-8 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-200 flex items-center justify-center font-bold text-sm">
+          ✕
+        </button>
+      </div>
+
+      <!-- Training Input Section -->
+      <div class="space-y-3 mb-3">
+        <div>
+          <label class="block text-[11px] font-mono-hud text-purple-300 mb-1 font-bold">1. ITEM NAME (वस्तु का नाम):</label>
+          <div class="grid grid-cols-2 gap-2">
+            <input 
+              type="text" 
+              id="train-item-name-en" 
+              placeholder="e.g. Medicine Bottle, Keys..." 
+              class="w-full bg-black/60 border border-purple-500/50 rounded-lg px-3 py-1.5 text-xs text-white placeholder-slate-500 font-mono-hud focus:border-purple-400 focus:outline-none"
+            />
+            <input 
+              type="text" 
+              id="train-item-name-hi" 
+              placeholder="उदा. दवाई की बोतल, चाबी..." 
+              class="w-full bg-black/60 border border-purple-500/50 rounded-lg px-3 py-1.5 text-xs text-white placeholder-slate-500 font-mono-hud focus:border-purple-400 focus:outline-none"
+            />
+          </div>
+        </div>
+
+        <!-- Training Viewfinder with Target Reticle -->
+        <div class="relative w-full h-44 bg-black/90 rounded-xl border border-purple-500/40 overflow-hidden flex items-center justify-center">
+          <canvas id="train-viewfinder-canvas" class="w-full h-full object-cover"></canvas>
+          
+          <!-- Centered Item Target Reticle -->
+          <div class="absolute inset-0 pointer-events-none flex flex-col items-center justify-center p-3">
+            <div id="train-target-box" class="w-28 h-28 border-2 border-dashed border-purple-400/80 bg-purple-500/10 rounded-xl flex flex-col items-center justify-center transition-all">
+              <span class="text-xl">🎯</span>
+              <span class="text-[9px] font-mono-hud text-purple-200 font-bold mt-1 text-center px-1">HOLD OBJECT INSIDE BOX</span>
+            </div>
+          </div>
+
+          <!-- Training Status Overlay -->
+          <div id="train-status-overlay" class="absolute bottom-2 left-2 right-2 flex justify-between items-center text-[9px] font-mono-hud bg-black/80 px-2.5 py-1 rounded border border-purple-500/30">
+            <span id="train-status-text" class="text-purple-300">STATUS: STANDBY</span>
+            <span id="train-sample-count" class="text-slate-300">0 / 15 SAMPLES</span>
+          </div>
+        </div>
+
+        <!-- Capture Progress Bar -->
+        <div class="w-full bg-slate-800 rounded-full h-2 overflow-hidden flex">
+          <div id="train-progress-bar" class="bg-gradient-to-r from-purple-500 to-pink-500 h-full w-[0%] transition-all duration-100"></div>
+        </div>
+
+        <!-- Train Button -->
+        <button id="btn-start-training" onclick="startItemTraining()" class="w-full py-2.5 rounded-xl bg-gradient-to-r from-purple-600 via-indigo-600 to-purple-700 hover:from-purple-500 hover:to-indigo-500 text-white font-hud font-bold text-xs uppercase tracking-wider shadow-[0_0_20px_rgba(168,85,247,0.4)] flex items-center justify-center gap-2 transition active:scale-95">
+          <span>📸</span> <span id="btn-train-label">CAPTURE & TRAIN MODEL (15 SAMPLES)</span>
+        </button>
+      </div>
+
+      <!-- Trained Items Library -->
+      <div class="border-t border-slate-700/80 pt-2 flex-1 flex flex-col min-h-0">
+        <div class="flex justify-between items-center mb-1.5 text-[11px] font-mono-hud">
+          <span class="text-slate-300 font-bold">MY TRAINED ITEMS (सीखी गई वस्तुएं):</span>
+          <span id="trained-items-badge" class="text-purple-300 font-bold">0 SAVED</span>
+        </div>
+        <div id="trained-items-list" class="overflow-y-auto max-h-28 pr-1 space-y-1 font-mono-hud text-[11px]">
+          <div class="text-slate-500 italic text-center py-2">No personal items trained yet. Try training your medicine bottle or keys!</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
   <div class="fixed inset-0 scanlines z-40 pointer-events-none"></div>
 
   <!-- Ambient Blue Starfield / Cyber Grid Overlay -->
   <div class="fixed inset-0 pointer-events-none z-0 opacity-25" style="background-image: radial-gradient(rgba(0, 240, 255, 0.15) 1px, transparent 1px); background-size: 32px 32px;"></div>
 
   <!-- ================= TOP SILVER NAVIGATION BAR ================= -->
-  <header class="relative z-30 silver-panel px-5 py-2.5 flex items-center justify-between">
-    <div class="flex items-center gap-3">
+  <header class="relative z-30 silver-panel px-3 sm:px-5 py-2 sm:py-2.5 flex items-center justify-between flex-wrap gap-2">
+    <div class="flex items-center gap-2.5 sm:gap-3">
       <!-- Metallic Arc Logo -->
-      <div class="relative w-8 h-8 rounded-full border border-slate-300 flex items-center justify-center bg-gradient-to-tr from-slate-900 via-sky-950 to-slate-800 shadow-[0_0_15px_rgba(0,240,255,0.4)]">
-        <div class="w-3.5 h-3.5 rounded-full border border-[#00f0ff] bg-cyan-400/20 animate-pulse"></div>
+      <div class="relative w-7 h-7 sm:w-8 sm:h-8 rounded-full border border-slate-300 flex items-center justify-center bg-gradient-to-tr from-slate-900 via-sky-950 to-slate-800 shadow-[0_0_15px_rgba(0,240,255,0.4)]">
+        <div class="w-3 h-3 sm:w-3.5 sm:h-3.5 rounded-full border border-[#00f0ff] bg-cyan-400/20 animate-pulse"></div>
       </div>
       <div>
-        <div class="flex items-center gap-2">
-          <h1 class="font-hud text-sm sm:text-base font-black tracking-widest text-slate-100 uppercase">
+        <div class="flex items-center gap-1.5 sm:gap-2">
+          <h1 class="font-hud text-xs sm:text-base font-black tracking-widest text-slate-100 uppercase">
             DRISHTI // SAATHI
           </h1>
-          <span class="text-[9px] font-mono-hud text-cyan-300 bg-sky-950/80 px-2 py-0.5 rounded border border-cyan-500/40">
-            NEURAL HUD V5.0
+          <span class="text-[8px] sm:text-[9px] font-mono-hud text-cyan-300 bg-sky-950/80 px-1.5 py-0.5 rounded border border-cyan-500/40">
+            MOBILE AI HUD
           </span>
         </div>
-        <p class="text-[10px] font-mono-hud text-slate-400 tracking-wider">
-          TACTILE ACOUSTIC INTERFACE • SILVER & BLUE MATRIX
+        <p class="text-[9px] sm:text-[10px] font-mono-hud text-slate-400 tracking-wider hidden xs:block">
+          TACTILE ACOUSTIC INTERFACE • OFFLINE EDGE AI
         </p>
       </div>
     </div>
 
     <!-- Center System Status Text -->
-    <div class="hidden md:flex items-center gap-6 font-mono-hud text-xs">
+    <div class="hidden xl:flex items-center gap-6 font-mono-hud text-xs">
       <div class="flex items-center gap-2">
         <span class="w-2 h-2 rounded-full bg-cyan-400 shadow-[0_0_8px_#00f0ff]"></span>
         <span class="text-slate-300">CORE SENSORS: <strong class="text-white">ONLINE</strong></span>
+      </div>
+      <div class="flex items-center gap-2">
+        <span class="w-2 h-2 rounded-full bg-purple-400 shadow-[0_0_8px_#a855f7]" id="ai-model-dot"></span>
+        <span class="text-slate-300"><strong id="ai-model-status" class="text-purple-300">AI: COCO-SSD STANDBY</strong></span>
       </div>
       <div class="flex items-center gap-2">
         <span class="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_8px_#34d399]"></span>
@@ -276,34 +384,62 @@
     </div>
 
     <!-- Quick Audio, Route & Language Controls -->
-    <div class="flex items-center gap-2">
+    <div class="flex items-center gap-1.5 sm:gap-2 flex-wrap">
+      <!-- Fullscreen Toggle Button -->
+      <button id="btn-fullscreen" onclick="toggleFullscreen()" class="px-2 py-1.5 rounded-lg border border-cyan-500/50 bg-sky-950/60 hover:bg-cyan-500/30 text-cyan-200 text-xs font-mono-hud font-bold transition flex items-center gap-1 shadow-sm active:scale-95" title="Toggle Fullscreen">
+        <span id="fullscreen-icon">⛶</span>
+      </button>
+
       <!-- Route Recorder Live Badge -->
-      <button id="btn-route-recorder" onclick="toggleRouteRecording()" class="px-2.5 py-1.5 rounded-lg border border-red-500/60 bg-red-950/40 hover:bg-red-900/60 text-red-200 text-xs font-mono-hud font-bold transition flex items-center gap-1.5 shadow-[0_0_10px_rgba(239,68,68,0.25)]" title="Toggle Route Recorder">
+      <button id="btn-route-recorder" onclick="toggleRouteRecording()" class="px-2 sm:px-2.5 py-1.5 rounded-lg border border-red-500/60 bg-red-950/40 hover:bg-red-900/60 text-red-200 text-[10px] sm:text-xs font-mono-hud font-bold transition flex items-center gap-1 shadow-[0_0_10px_rgba(239,68,68,0.25)] active:scale-95" title="Toggle Route Recorder">
         <span class="w-2 h-2 rounded-full bg-red-500 animate-pulse" id="rec-dot"></span>
-        <span id="route-rec-label">REC: 00:00 (0.0m)</span>
+        <span id="route-rec-label" class="hidden sm:inline">REC: 00:00</span>
+        <span class="sm:hidden font-mono text-[9px]">REC</span>
       </button>
 
       <!-- View Recorded Route Modal Button -->
-      <button id="btn-view-route" onclick="openRouteModal()" class="px-2.5 py-1.5 rounded-lg border border-cyan-500/50 bg-sky-950/50 hover:bg-cyan-500/30 text-cyan-200 text-xs font-mono-hud font-bold transition flex items-center gap-1 shadow-sm" title="View Recorded Route Map">
-        <span>🗺️</span> <span>ROUTE</span>
+      <button id="btn-view-route" onclick="openRouteModal()" class="px-2 sm:px-2.5 py-1.5 rounded-lg border border-cyan-500/50 bg-sky-950/50 hover:bg-cyan-500/30 text-cyan-200 text-xs font-mono-hud font-bold transition flex items-center gap-1 shadow-sm active:scale-95" title="View Recorded Route Map">
+        <span>🗺️</span> <span class="hidden sm:inline">ROUTE</span>
       </button>
 
-      <button id="btn-lang-toggle" onclick="toggleLanguage()" class="px-2.5 py-1.5 rounded-lg border border-slate-500/50 bg-slate-900/60 hover:bg-slate-800 text-slate-200 text-xs font-mono-hud font-bold transition flex items-center gap-1.5 shadow-sm">
-        <span>🌐</span> <span id="lang-label">HI / EN</span>
+      <!-- Teachable Vision Custom Trainer Button -->
+      <button id="btn-train-ai" onclick="openTeachableModal()" class="px-2 sm:px-2.5 py-1.5 rounded-lg border border-purple-500/60 bg-purple-950/40 hover:bg-purple-900/60 text-purple-200 text-xs font-mono-hud font-bold transition flex items-center gap-1 shadow-[0_0_10px_rgba(168,85,247,0.25)] active:scale-95" title="Train Custom Personal Objects">
+        <span>🧠</span> <span class="hidden sm:inline">TRAIN AI</span>
       </button>
 
-      <button id="btn-mic-toggle" onclick="toggleListeningState()" class="px-2.5 py-1.5 rounded-lg border border-cyan-500/60 bg-sky-950/40 hover:bg-cyan-500/20 text-cyan-200 text-xs font-hud tracking-wider transition flex items-center gap-2 shadow-[0_0_12px_rgba(0,240,255,0.2)]">
+      <button id="btn-lang-toggle" onclick="toggleLanguage()" class="px-2 sm:px-2.5 py-1.5 rounded-lg border border-slate-500/50 bg-slate-900/60 hover:bg-slate-800 text-slate-200 text-xs font-mono-hud font-bold transition flex items-center gap-1 shadow-sm active:scale-95">
+        <span>🌐</span> <span id="lang-label">HI/EN</span>
+      </button>
+
+      <button id="btn-mic-toggle" onclick="toggleListeningState()" class="px-2 sm:px-2.5 py-1.5 rounded-lg border border-cyan-500/60 bg-sky-950/40 hover:bg-cyan-500/20 text-cyan-200 text-[11px] sm:text-xs font-hud tracking-wider transition flex items-center gap-1.5 shadow-[0_0_12px_rgba(0,240,255,0.2)] active:scale-95">
         <span class="w-2 h-2 rounded-full bg-cyan-400 animate-ping"></span>
-        <span id="mic-status-label">VOICE READY</span>
+        <span id="mic-status-label" class="hidden sm:inline">VOICE READY</span>
+        <span class="sm:hidden">MIC</span>
       </button>
     </div>
   </header>
 
+  <!-- ================= MOBILE VIEW SWITCHER (Visible on Mobile & Tablet) ================= -->
+  <nav class="lg:hidden relative z-30 px-2 py-1.5 bg-[#030d22]/95 backdrop-blur-md border-b border-cyan-500/30 flex items-center justify-between gap-1 text-[11px] font-hud select-none sticky top-0 shadow-lg" aria-label="Mobile Navigation Modes">
+    <button onclick="setMobileView('camera')" id="mob-tab-camera" class="flex-1 py-2 px-1 rounded-lg border border-cyan-400 bg-cyan-950/90 text-cyan-200 font-bold flex items-center justify-center gap-1 shadow-[0_0_10px_rgba(0,240,255,0.3)] transition active:scale-95">
+      <span>📷</span> <span>CAM & PATH</span>
+    </button>
+    <button onclick="setMobileView('voice')" id="mob-tab-voice" class="flex-1 py-2 px-1 rounded-lg border border-slate-700 bg-slate-900/60 text-slate-300 font-normal flex items-center justify-center gap-1 transition active:scale-95">
+      <span>🎙️</span> <span>JARVIS CORE</span>
+    </button>
+    <button onclick="setMobileView('telemetry')" id="mob-tab-telemetry" class="flex-1 py-2 px-1 rounded-lg border border-slate-700 bg-slate-900/60 text-slate-300 font-normal flex items-center justify-center gap-1 transition active:scale-95">
+      <span>🧭</span> <span>RADAR</span>
+    </button>
+    <button onclick="setMobileView('all')" id="mob-tab-all" class="py-2 px-2.5 rounded-lg border border-slate-700 bg-slate-900/60 text-slate-300 font-normal flex items-center justify-center gap-1 transition active:scale-95" title="Show All Panels Stacked">
+      <span>📱</span> <span>ALL</span>
+    </button>
+  </nav>
+
   <!-- ================= MAIN VIEWPORT (LEFT HUD | CENTRAL JARVIS CIRCLE | RIGHT HUD) ================= -->
-  <main class="relative z-20 flex-1 grid grid-cols-1 lg:grid-cols-12 gap-4 my-3 items-center">
+  <main class="relative z-20 flex-1 grid grid-cols-1 lg:grid-cols-12 gap-3 lg:gap-4 my-2 lg:my-3 items-start lg:items-center px-2 sm:px-4">
 
     <!-- LEFT PANEL: Real-Time Spatial Radar & Depth Telemetry (3 cols) -->
-    <div class="hidden lg:flex lg:col-span-3 flex-col justify-between h-full max-h-[580px] space-y-3">
+    <div id="left-telemetry-panel" class="hidden lg:flex lg:col-span-3 flex-col justify-between h-full max-h-[580px] space-y-3">
       
       <!-- Telemetry Card -->
       <section class="silver-panel p-4 flex-1">
@@ -372,14 +508,14 @@
     </div>
 
     <!-- ================= CENTERPIECE: THE JARVIS CENTRAL CORE CIRCLE ================= -->
-    <div class="col-span-1 lg:col-span-6 flex flex-col items-center justify-center relative min-h-[420px] sm:min-h-[480px]">
+    <div id="center-jarvis-panel" class="col-span-1 lg:col-span-6 flex flex-col items-center justify-center relative min-h-[340px] sm:min-h-[440px] py-2">
       
       <!-- Central JARVIS Spherical Reactor Rings & Animation Container -->
-      <div class="relative w-[340px] h-[340px] sm:w-[420px] sm:h-[420px] flex items-center justify-center cursor-pointer group" onclick="handleCentralCircleClick()" title="Click to Speak / Acknowledge">
+      <div class="relative w-[280px] h-[280px] sm:w-[350px] sm:h-[350px] lg:w-[420px] lg:h-[420px] flex items-center justify-center cursor-pointer group" onclick="handleCentralCircleClick()" title="Click to Speak / Acknowledge">
         
         <!-- Ripple Effect Wave for Speech/Listening -->
-        <div id="ripple-ring-1" class="absolute w-[320px] h-[320px] rounded-full border border-cyan-400/40 pointer-events-none transition-all"></div>
-        <div id="ripple-ring-2" class="absolute w-[360px] h-[360px] rounded-full border border-slate-300/20 pointer-events-none transition-all"></div>
+        <div id="ripple-ring-1" class="absolute w-[260px] h-[260px] sm:w-[320px] sm:h-[320px] rounded-full border border-cyan-400/40 pointer-events-none transition-all"></div>
+        <div id="ripple-ring-2" class="absolute w-[290px] h-[290px] sm:w-[360px] sm:h-[360px] rounded-full border border-slate-300/20 pointer-events-none transition-all"></div>
 
         <!-- 1. Outer Brushed Silver Calibration Dial -->
         <svg class="absolute inset-0 w-full h-full ring-spin-cw" viewBox="0 0 420 420">
@@ -407,17 +543,17 @@
         </svg>
 
         <!-- 4. Real-time Acoustic Circular Waveform Canvas Layer -->
-        <canvas id="circle-spectrum-canvas" width="340" height="340" class="absolute w-[290px] h-[290px] sm:w-[320px] sm:h-[320px] pointer-events-none"></canvas>
+        <canvas id="circle-spectrum-canvas" width="340" height="340" class="absolute w-[240px] h-[240px] sm:w-[290px] sm:h-[290px] lg:w-[320px] lg:h-[320px] pointer-events-none"></canvas>
 
         <!-- 5. THE GLOWING CENTRAL ARC REACTOR SPHERE (CLEAN HOLOGRAPHIC CORE) -->
-        <div id="jarvis-core-sphere" class="relative z-10 w-32 h-32 sm:w-40 sm:h-40 rounded-full bg-gradient-to-tr from-[#020b1e] via-[#041a3d] to-[#0a2e66] border border-cyan-400/50 flex items-center justify-center core-pulsing shadow-[0_0_45px_rgba(0,240,255,0.45)] group-hover:scale-105 transition-transform duration-300">
+        <div id="jarvis-core-sphere" class="relative z-10 w-28 h-28 sm:w-36 sm:h-36 lg:w-40 lg:h-40 rounded-full bg-gradient-to-tr from-[#020b1e] via-[#041a3d] to-[#0a2e66] border border-cyan-400/50 flex items-center justify-center core-pulsing shadow-[0_0_45px_rgba(0,240,255,0.45)] group-hover:scale-105 transition-transform duration-300">
           <!-- Pure Glowing Energy Aperture Node without inner circle or text -->
           <div class="w-6 h-6 sm:w-8 sm:h-8 rounded-full bg-cyan-400/30 border border-cyan-300/80 shadow-[0_0_22px_#00f0ff] animate-pulse"></div>
         </div>
 
         <!-- Subtle Click-to-Talk Hint -->
-        <div class="absolute -bottom-2 bg-slate-900/90 border border-slate-500/40 px-4 py-1 rounded-full text-[10px] font-mono-hud text-slate-300 shadow-lg tracking-wider">
-          TAP CIRCLE OR PRESS SPACEBAR TO TALK
+        <div class="absolute -bottom-2 bg-slate-900/90 border border-slate-500/40 px-3.5 py-1 rounded-full text-[9px] sm:text-[10px] font-mono-hud text-slate-300 shadow-lg tracking-wider">
+          TAP CIRCLE TO TALK // स्पेस दबाएँ
         </div>
       </div>
 
@@ -443,64 +579,56 @@
 
     </div>
 
-    <!-- RIGHT PANEL: Live Camera Feed & Detected Obstacles (3 cols) -->
-    <div class="hidden lg:flex lg:col-span-3 flex-col justify-between h-full max-h-[580px] space-y-3">
+    <!-- RIGHT PANEL: Live Camera Feed & "OBJECT IN FRONT OF ME" (Always Visible) -->
+    <div class="flex flex-col col-span-1 lg:col-span-3 space-y-3" id="right-camera-panel">
       
       <!-- Live Device Optical Camera Feed -->
-      <section class="silver-panel p-3.5 flex-1 flex flex-col justify-between" id="camera-section">
+      <section class="silver-panel p-3.5 flex flex-col justify-between" id="camera-section">
         <div class="flex items-center justify-between border-b border-slate-700/60 pb-2 mb-2">
           <span class="font-hud text-xs font-bold text-slate-200 tracking-wider flex items-center gap-1.5">
             <span class="w-2 h-2 rounded-full bg-cyan-400 animate-pulse"></span>
-            OPTICAL FEED
+            LIVE CAMERA FEED
           </span>
-          <span class="font-mono-hud text-[10px] text-cyan-300" id="camera-fps-badge">ACTIVE 60FPS</span>
+          <div class="flex items-center gap-2">
+            <button onclick="toggleCamFacing()" title="Flip Front / Rear Camera" class="px-2.5 py-1 rounded-lg text-[9px] font-mono-hud bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-slate-600 flex items-center gap-1.5 transition active:scale-95 shadow-sm">
+              🔄 <span id="cam-flip-label">REAR CAM</span>
+            </button>
+            <span class="font-mono-hud text-[10px] text-cyan-300" id="camera-fps-badge">ACTIVE 60FPS</span>
+          </div>
         </div>
 
         <!-- Video Viewfinder Frame -->
-        <div class="relative w-full h-44 bg-black/90 rounded-lg border border-slate-700/80 overflow-hidden flex items-center justify-center">
-          <!-- Real Webcam Video Element (Hidden if no camera or permissions waiting) -->
-          <video id="device-camera-video" autoplay playsinline muted class="w-full h-full object-cover hidden"></video>
+        <div id="camera-viewfinder-container" class="relative w-full h-52 sm:h-56 md:h-64 bg-black rounded-xl border border-cyan-500/40 overflow-hidden flex items-center justify-center shadow-[0_0_20px_rgba(0,240,255,0.15)] cursor-pointer touch-manipulation" onclick="handleCameraContainerClick()">
+          <!-- Real Webcam Video Element -->
+          <video id="device-camera-video" autoplay playsinline webkit-playsinline muted class="absolute inset-0 w-full h-full object-cover z-0"></video>
           
-          <!-- Animated Synthetic Optical AI Vision Canvas (Always active rendering engine) -->
-          <canvas id="camera-vision-canvas" class="w-full h-full object-cover"></canvas>
+          <!-- Animated Synthetic Optical AI Vision Canvas (Renders transparent HUD overlays or simulated grid) -->
+          <canvas id="camera-vision-canvas" class="absolute inset-0 w-full h-full object-cover pointer-events-none z-10"></canvas>
           
           <!-- Viewfinder HUD Overlays -->
-          <div class="absolute inset-0 pointer-events-none p-2 flex flex-col justify-between">
+          <div class="absolute inset-0 pointer-events-none p-2 flex flex-col justify-between z-20">
             <div class="flex justify-between text-[8px] font-mono-hud text-cyan-300">
               <span class="bg-black/70 px-1.5 py-0.5 rounded border border-cyan-500/40">LENS: 120° WIDE</span>
               <span id="cam-live-indicator" class="bg-cyan-950/80 text-cyan-300 px-1.5 py-0.5 rounded border border-cyan-400/50 flex items-center gap-1">
                 <span class="w-1.5 h-1.5 bg-cyan-400 rounded-full animate-ping"></span>
-                <span id="cam-live-status-text">NEURAL AI TRACKING</span>
+                <span id="cam-live-status-text">CAMERA LIVE</span>
               </span>
             </div>
             
-            <!-- Real-time HUD Obstacle Reticle -->
-            <div id="ai-hud-reticle" class="w-32 h-20 border border-cyan-400/70 bg-cyan-500/10 rounded mx-auto my-auto flex flex-col items-center justify-between p-1 transition-all">
-              <div class="w-full flex justify-between text-[8px] font-mono-hud text-cyan-300">
-                <span id="hud-reticle-id">OBJ #1</span>
-                <span id="hud-reticle-conf">97.4%</span>
-              </div>
-              <div class="w-3 h-3 border-t-2 border-l-2 border-cyan-300 self-start"></div>
-              <div class="w-full text-center text-[9px] font-hud text-white font-black tracking-wider bg-black/70 py-0.5 rounded" id="hud-reticle-label">
-                CLEAR PATHWAY
-              </div>
-            </div>
-
             <div class="flex justify-between text-[8px] font-mono-hud text-slate-300 bg-black/70 px-1.5 py-0.5 rounded">
-              <span id="cam-hardware-source">SOURCE: NEURAL OPTICAL</span>
-              <span id="cam-facing-tag">RANGE: 3.8M</span>
+              <span id="cam-hardware-source">SOURCE: CAMERA HD</span>
+              <span id="cam-facing-tag">FACING: WORLD/REAR</span>
             </div>
           </div>
 
-          <!-- Camera Loading / Switch Prompt -->
-          <div id="cam-loading" class="absolute inset-0 bg-[#030d22]/90 flex flex-col items-center justify-center p-3 text-center transition-opacity hidden">
-            <span class="text-xl mb-1 text-cyan-300">📷</span>
-            <p class="text-[11px] font-mono-hud text-slate-200 font-bold mb-1.5">DEVICE CAMERA STANDBY</p>
-            <div class="flex gap-2">
-              <button onclick="initCameraStream()" class="px-2.5 py-1 bg-cyan-500/30 hover:bg-cyan-500/50 border border-cyan-400 rounded text-[10px] font-mono-hud text-cyan-100 font-bold">
-                START WEBCAM
-              </button>
-            </div>
+          <!-- Camera Loading / Start Prompt Overlay (Hidden once active) -->
+          <div id="cam-loading" class="absolute inset-0 bg-[#030d22]/90 flex flex-col items-center justify-center p-3 text-center transition-opacity z-30 hidden">
+            <span class="text-3xl mb-1 text-cyan-300 animate-bounce">📷</span>
+            <p class="text-xs font-hud text-white font-bold mb-1">CAMERA NOT STARTED</p>
+            <p class="text-[9px] font-mono-hud text-slate-300 mb-2.5">Tap button below to start live video stream</p>
+            <button onclick="event.stopPropagation(); initCameraStream();" class="px-4 py-2 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 border border-cyan-300 rounded-lg text-xs font-hud text-white font-black tracking-wider shadow-[0_0_15px_rgba(0,240,255,0.4)] active:scale-95 transition">
+              📷 START LIVE CAMERA FEED
+            </button>
           </div>
         </div>
 
@@ -508,13 +636,11 @@
         <div class="mt-2 p-2 bg-black/60 rounded-lg border border-slate-700/80 font-mono-hud text-[10px]">
           <div class="flex justify-between items-center mb-1">
             <span class="text-slate-400">ESTIMATED PROXIMITY:</span>
-            <span id="live-distance-value" class="text-emerald-400 font-bold text-xs">3.2m [CLEAR PATH]</span>
+            <span id="live-distance-value" class="text-emerald-400 font-bold text-xs">3.5m [CLEAR PATH]</span>
           </div>
-          <!-- Proximity Range Meter Bar -->
           <div class="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden flex">
             <div id="live-distance-bar" class="bg-gradient-to-r from-red-500 via-yellow-400 to-cyan-400 h-full w-[75%] transition-all duration-150"></div>
           </div>
-          <!-- Real-time Calibration Buttons -->
           <div class="flex justify-between items-center mt-2 text-[9px]">
             <span class="text-slate-400">CALIBRATION:</span>
             <div class="flex gap-1.5">
@@ -531,48 +657,105 @@
           </div>
         </div>
 
-        <!-- Camera Switch & Scan Buttons -->
-        <div class="grid grid-cols-2 gap-2 mt-2">
-          <button onclick="toggleCamFacing()" class="py-1.5 px-2 text-[10px] font-hud border border-slate-600 hover:border-slate-400 bg-slate-900/60 text-slate-200 rounded transition flex items-center justify-center gap-1 font-bold">
-            <span>🔄</span> <span>CAMERA TOGGLE</span>
+        <!-- Camera Toolbar Buttons -->
+        <div class="grid grid-cols-4 gap-1.5 mt-2">
+          <button onclick="initCameraStream()" class="py-1.5 px-1.5 text-[10px] font-hud border border-cyan-500/80 hover:border-cyan-400 bg-cyan-950/80 text-cyan-200 rounded transition flex items-center justify-center gap-1 font-bold shadow-[0_0_10px_rgba(0,240,255,0.2)] active:scale-95">
+            <span>📷</span> <span>START</span>
           </button>
-          <button onclick="triggerSceneQuery()" class="py-1.5 px-2 text-[10px] font-hud border border-cyan-500/60 hover:border-cyan-300 bg-cyan-950/60 text-cyan-200 rounded transition flex items-center justify-center gap-1 font-bold shadow-[0_0_10px_rgba(0,240,255,0.15)]">
-            <span>🔍</span> <span>SCAN SCENE</span>
+          <button onclick="toggleCamFacing()" class="py-1.5 px-1.5 text-[10px] font-hud border border-slate-600 hover:border-slate-400 bg-slate-900/60 text-slate-200 rounded transition flex items-center justify-center gap-1 font-bold active:scale-95">
+            <span>🔄</span> <span>FLIP</span>
+          </button>
+          <button onclick="openTeachableModal()" class="py-1.5 px-1.5 text-[10px] font-hud border border-purple-500/60 hover:border-purple-400 bg-purple-950/60 text-purple-200 rounded transition flex items-center justify-center gap-1 font-bold shadow-[0_0_10px_rgba(168,85,247,0.25)] active:scale-95">
+            <span>🧠</span> <span>TRAIN</span>
+          </button>
+          <button onclick="triggerSceneQuery()" class="py-1.5 px-1.5 text-[10px] font-hud border border-cyan-500/60 hover:border-cyan-300 bg-cyan-950/60 text-cyan-200 rounded transition flex items-center justify-center gap-1 font-bold shadow-[0_0_10px_rgba(0,240,255,0.15)] active:scale-95">
+            <span>🔍</span> <span>SCAN</span>
           </button>
         </div>
       </section>
 
-      <!-- Active Recognized Object Card -->
-      <section class="silver-panel p-3.5">
-        <div class="flex justify-between items-center border-b border-slate-700/60 pb-1.5 mb-2">
-          <span class="font-hud text-xs font-bold text-slate-200 tracking-wider">DETECTED OBSTACLES</span>
-          <button onclick="cycleSimulatedObstacle()" class="text-[10px] font-mono-hud text-cyan-300 hover:underline">NEXT ↻</button>
+      <!-- DEDICATED SECTION: OBJECT IN FRONT OF ME (सामने की वस्तुएं) -->
+      <section class="silver-panel p-3.5 space-y-2.5 shadow-xl border border-cyan-500/30" id="section-object-in-front">
+        <!-- Section Header -->
+        <div class="flex justify-between items-center border-b border-slate-700/80 pb-2">
+          <div class="flex items-center gap-2">
+            <span class="w-2.5 h-2.5 rounded-full bg-amber-400 animate-ping"></span>
+            <h3 class="font-hud text-xs sm:text-sm font-black text-amber-300 tracking-wider">
+              OBJECT IN FRONT OF ME <span class="text-slate-400 font-normal text-[10px]">(सामने क्या है)</span>
+            </h3>
+          </div>
+          <span id="front-radar-badge" class="px-2 py-0.5 rounded text-[9px] font-mono-hud bg-cyan-950/80 border border-cyan-400/50 text-cyan-300 font-bold">
+            RADAR ACTIVE
+          </span>
         </div>
 
-        <div class="p-2.5 bg-black/40 border border-slate-700/70 rounded-lg">
-          <div class="flex justify-between text-[9px] font-mono-hud text-slate-400">
-            <span>IDENTIFIED ENTITY:</span>
-            <span id="obj-confidence" class="text-cyan-400 font-bold">96.8% MATCH</span>
-          </div>
-          
-          <div class="flex items-baseline justify-between mt-1">
-            <h4 id="obj-name-en" class="font-hud text-xs sm:text-sm font-black text-white tracking-wide">
-              CLEAR PATHWAY
-            </h4>
-            <span id="obj-name-hi" class="text-xs font-bold text-cyan-300">
-              साफ रास्ता
-            </span>
+        <!-- Primary Detected Object Card -->
+        <div class="p-3 bg-gradient-to-br from-slate-950 via-[#071328] to-slate-900 border border-cyan-500/40 rounded-xl relative overflow-hidden shadow-inner">
+          <div class="flex items-start justify-between">
+            <div class="flex items-center gap-3">
+              <!-- Dynamic Category Icon (Glass, Motorcycle, Bed, Person, etc.) -->
+              <div id="front-obj-icon" class="w-12 h-12 rounded-xl bg-cyan-950/80 border border-cyan-400/60 flex items-center justify-center text-2xl shadow-[0_0_15px_rgba(0,240,255,0.25)] flex-shrink-0">
+                🚶
+              </div>
+              <div>
+                <div class="text-[9px] font-mono-hud text-slate-400 uppercase tracking-widest flex items-center gap-1.5">
+                  <span id="front-obj-category">CORRIDOR STATUS</span>
+                  <span id="front-obj-conf" class="text-cyan-400 font-bold">• 98% MATCH</span>
+                </div>
+                <!-- Entity Names in English & Hindi -->
+                <h4 id="front-obj-name-en" class="font-hud text-sm sm:text-base font-black text-white tracking-wide leading-tight">
+                  CLEAR PATHWAY
+                </h4>
+                <p id="front-obj-name-hi" class="text-xs font-bold text-cyan-300 mt-0.5">
+                  सामने का रास्ता साफ है
+                </p>
+              </div>
+            </div>
+
+            <!-- Proximity Badge -->
+            <div class="text-right">
+              <span id="front-obj-dist" class="font-hud text-lg font-black text-emerald-400 block leading-none">
+                3.5m
+              </span>
+              <span id="front-hazard-tag" class="inline-block mt-1 px-1.5 py-0.5 rounded text-[8px] font-mono-hud font-bold bg-emerald-950 text-emerald-300 border border-emerald-500/50">
+                PATH CLEAR
+              </span>
+            </div>
           </div>
 
-          <div class="flex justify-between text-[10px] font-mono-hud mt-2 pt-1 border-t border-slate-800">
-            <span class="text-slate-300">RANGE: <strong id="obj-range" class="text-emerald-400">3.8m [SAFE]</strong></span>
-            <span class="text-slate-300">DIRECTION: <strong id="obj-zone" class="text-slate-100">CENTER</strong></span>
+          <!-- Direction & Compass Steering Strip -->
+          <div class="mt-2.5 pt-2 border-t border-slate-800/80 flex items-center justify-between text-[10px] font-mono-hud">
+            <div class="flex items-center gap-1 text-slate-300">
+              <span class="text-slate-400">DIRECTION:</span>
+              <strong id="front-obj-direction" class="text-white">STRAIGHT [NORTH]</strong>
+            </div>
+            <div class="flex items-center gap-1 text-slate-300">
+              <span class="text-slate-400">GUIDANCE:</span>
+              <strong id="front-obj-guidance" class="text-emerald-300 font-bold">PROCEED FORWARD ↑</strong>
+            </div>
           </div>
         </div>
 
-        <button onclick="speakCurrentObstacle()" class="mt-2 w-full py-1.5 bg-sky-900/40 hover:bg-sky-800/60 border border-cyan-500/40 rounded text-[11px] font-mono-hud text-cyan-200 font-bold flex items-center justify-center gap-1.5 transition">
-          <span>🗣️</span> <span>SPEAK OBSTACLE ALERT</span>
-        </button>
+        <!-- Real-Time List of All Objects Detected in Front / Path -->
+        <div class="space-y-1">
+          <div class="flex justify-between items-center text-[9px] font-mono-hud text-slate-400 px-0.5">
+            <span>ALL OBJECTS IN VIEW & PATH:</span>
+            <span id="front-objects-count" class="text-cyan-300">0 DETECTED</span>
+          </div>
+          <div id="front-objects-list" class="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto p-1.5 bg-black/50 border border-slate-800/80 rounded-lg">
+            <span class="text-[9px] font-mono-hud text-slate-500 italic py-1 px-2">No obstacles detected in forward corridor.</span>
+          </div>
+        </div>
+
+        <!-- Quick Voice & Scan Action Buttons -->
+        <div class="grid grid-cols-2 gap-2 pt-1">
+          <button onclick="announceSceneDescription()" class="py-2 px-2 bg-sky-950/70 hover:bg-sky-900 border border-cyan-500/50 rounded-lg text-[10px] sm:text-[11px] font-hud text-cyan-200 font-bold flex items-center justify-center gap-1 transition shadow-[0_0_12px_rgba(0,240,255,0.15)] active:scale-95">
+            <span>🗣️</span> <span>WHAT IS IN FRONT?</span>
+          </button>
+          <button onclick="triggerPathQuery()" class="py-2 px-2 bg-amber-950/70 hover:bg-amber-900 border border-amber-500/50 rounded-lg text-[10px] sm:text-[11px] font-hud text-amber-200 font-bold flex items-center justify-center gap-1 transition shadow-[0_0_12px_rgba(245,158,11,0.15)] active:scale-95">
+            <span>🚶</span> <span>CHECK MY PATH</span>
+          </button>
+        </div>
       </section>
 
     </div>
@@ -703,6 +886,128 @@
     ];
 
     let currentObstacleIdx = 0;
+
+    /* -------------------------------------------------------------
+       1.5 MOBILE RESPONSIVENESS, HAPTIC FEEDBACK & SCREEN WAKE LOCK
+       ------------------------------------------------------------- */
+    let mobileWakeLock = null;
+    let currentMobileViewMode = 'all';
+
+    async function requestMobileWakeLock() {
+      try {
+        if ('wakeLock' in navigator && !mobileWakeLock) {
+          mobileWakeLock = await navigator.wakeLock.request('screen');
+          mobileWakeLock.addEventListener('release', () => {
+            mobileWakeLock = null;
+          });
+          console.log('Mobile screen wake lock active: screen will not sleep while navigating');
+        }
+      } catch (err) {
+        console.warn('Wake lock note:', err);
+      }
+    }
+
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') {
+        requestMobileWakeLock();
+      }
+    });
+
+    function triggerHaptic(type = 'tap') {
+      if (!('vibrate' in navigator)) return;
+      try {
+        if (type === 'danger') {
+          navigator.vibrate([240, 80, 240, 80, 320]); // Urgent stop alarm pattern
+        } else if (type === 'warning') {
+          navigator.vibrate([110, 60, 110]); // Caution obstacle pattern
+        } else if (type === 'tap') {
+          navigator.vibrate(28); // Subtle button click
+        } else if (type === 'success') {
+          navigator.vibrate([40, 40, 40]);
+        }
+      } catch (_) {}
+    }
+
+    function toggleFullscreen() {
+      triggerHaptic('tap');
+      const icon = document.getElementById('fullscreen-icon');
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen().then(() => {
+          if (icon) icon.innerText = '✕';
+        }).catch(() => {});
+      } else {
+        if (document.exitFullscreen) {
+          document.exitFullscreen().then(() => {
+            if (icon) icon.innerText = '⛶';
+          }).catch(() => {});
+        }
+      }
+    }
+
+    function setMobileView(tab) {
+      currentMobileViewMode = tab;
+      triggerHaptic('tap');
+
+      const leftPanel = document.getElementById('left-telemetry-panel');
+      const centerPanel = document.getElementById('center-jarvis-panel');
+      const rightPanel = document.getElementById('right-camera-panel');
+
+      const btnCam = document.getElementById('mob-tab-camera');
+      const btnVoice = document.getElementById('mob-tab-voice');
+      const btnTele = document.getElementById('mob-tab-telemetry');
+      const btnAll = document.getElementById('mob-tab-all');
+
+      const activeStyle = 'border-cyan-400 bg-cyan-950/90 text-cyan-200 shadow-[0_0_10px_rgba(0,240,255,0.3)] font-bold';
+      const inactiveStyle = 'border-slate-700 bg-slate-900/60 text-slate-300 font-normal';
+
+      [btnCam, btnVoice, btnTele, btnAll].forEach(b => {
+        if (b) {
+          b.className = b.className.replace(activeStyle, '').replace(inactiveStyle, '') + ' ' + inactiveStyle;
+        }
+      });
+
+      if (window.innerWidth >= 1024) {
+        if (leftPanel) leftPanel.style.display = '';
+        if (centerPanel) centerPanel.style.display = '';
+        if (rightPanel) rightPanel.style.display = '';
+        return;
+      }
+
+      if (tab === 'camera') {
+        if (btnCam) btnCam.className = btnCam.className.replace(inactiveStyle, '') + ' ' + activeStyle;
+        if (rightPanel) rightPanel.style.display = 'flex';
+        if (centerPanel) centerPanel.style.display = 'none';
+        if (leftPanel) leftPanel.style.display = 'none';
+      } else if (tab === 'voice') {
+        if (btnVoice) btnVoice.className = btnVoice.className.replace(inactiveStyle, '') + ' ' + activeStyle;
+        if (rightPanel) rightPanel.style.display = 'none';
+        if (centerPanel) centerPanel.style.display = 'flex';
+        if (leftPanel) leftPanel.style.display = 'none';
+      } else if (tab === 'telemetry') {
+        if (btnTele) btnTele.className = btnTele.className.replace(inactiveStyle, '') + ' ' + activeStyle;
+        if (rightPanel) rightPanel.style.display = 'none';
+        if (centerPanel) centerPanel.style.display = 'none';
+        if (leftPanel) leftPanel.style.display = 'flex';
+      } else { // 'all'
+        if (btnAll) btnAll.className = btnAll.className.replace(inactiveStyle, '') + ' ' + activeStyle;
+        if (rightPanel) rightPanel.style.display = 'flex';
+        if (centerPanel) centerPanel.style.display = 'flex';
+        if (leftPanel) leftPanel.style.display = 'flex';
+      }
+    }
+
+    window.addEventListener('resize', () => {
+      if (window.innerWidth >= 1024) {
+        const leftPanel = document.getElementById('left-telemetry-panel');
+        const centerPanel = document.getElementById('center-jarvis-panel');
+        const rightPanel = document.getElementById('right-camera-panel');
+        if (leftPanel) leftPanel.style.display = '';
+        if (centerPanel) centerPanel.style.display = '';
+        if (rightPanel) rightPanel.style.display = '';
+      } else {
+        setMobileView(currentMobileViewMode);
+      }
+    });
 
     /* -------------------------------------------------------------
        2. WEB AUDIO API SYNTHESIZER (STARK EARCONS & 3D SPATIAL PANNING)
@@ -1267,7 +1572,38 @@
         return;
       }
 
-      // 4. Scene description query
+      // 4. Teachable Vision / Train Personal Object Commands
+      if (
+        cleaned.includes('train') || 
+        cleaned.includes('teachable') || 
+        cleaned.includes('learn') || 
+        cleaned.includes('सिखाओ') || 
+        cleaned.includes('ट्रेन') || 
+        cleaned.includes('seekho') ||
+        cleaned.includes('sikhao')
+      ) {
+        openTeachableModal();
+        const trainHelp = jarvisState.language === 'hi'
+          ? "दृष्टि सीखो मोड खोला गया है। वस्तु का नाम दर्ज करें और उसे कैमरे के सामने रखें।"
+          : "Teachable Vision opened. Enter item name and hold the object inside the reticle box.";
+        speakJarvis(trainHelp);
+        return;
+      }
+
+      // 4.5. Find / Locate Object Query
+      if (
+        cleaned.includes('find') || 
+        cleaned.includes('where is') || 
+        cleaned.includes('locate') || 
+        cleaned.includes('ढूंढो') || 
+        cleaned.includes('कहाँ') || 
+        cleaned.includes('kahan')
+      ) {
+        queryObjectLocation(cleaned);
+        return;
+      }
+
+      // 5. Scene description query
       if (
         cleaned.includes('front') || 
         cleaned.includes('see') || 
@@ -1280,20 +1616,33 @@
         return;
       }
 
-      // 5. Path clearance query
+      // 6. Path clearance & obstacle in path query
       if (
         cleaned.includes('clear') || 
         cleaned.includes('path') || 
         cleaned.includes('walk') || 
+        cleaned.includes('obstacle') ||
+        cleaned.includes('hazard') ||
+        cleaned.includes('glass') ||
+        cleaned.includes('motorcycle') ||
+        cleaned.includes('bike') ||
+        cleaned.includes('bed') ||
         cleaned.includes('साफ') || 
         cleaned.includes('रास्ता') ||
+        cleaned.includes('रास्ते') ||
+        cleaned.includes('रुकावट') ||
+        cleaned.includes('सामान') ||
+        cleaned.includes('गिलास') ||
+        cleaned.includes('मोटरसाइकिल') ||
+        cleaned.includes('बिस्तर') ||
+        cleaned.includes('पलंग') ||
         cleaned.includes('rasta')
       ) {
         triggerPathQuery();
         return;
       }
 
-      // 6. Explicit Language Switch Commands
+      // 7. Explicit Language Switch Commands
       if (cleaned.includes('hindi') || cleaned.includes('हिंदी')) {
         jarvisState.language = 'hi';
         updateLanguageUI();
@@ -1507,7 +1856,7 @@
       const now = Date.now();
 
       // ================= 1. STRICT HAND COVER & OBSTACLE GUARD =================
-      const isBlocked = (dc <= 0.65) || (steer === 'STOP') || visionDepthEngine.wasInCriticalStop;
+      const isBlocked = visionDepthEngine.isLensOccluded || (dc <= 0.65) || (steer === 'STOP') || visionDepthEngine.wasInCriticalStop;
 
       if (isBlocked) {
         // Camera is covered by hand or standing directly in front of a wall!
@@ -1547,7 +1896,7 @@
                 angle: journeyRecorder.currentAngleDeg,
                 timeStr: timeStr,
                 eventType: "TURN_RIGHT",
-                textEn: `Veered Right (${journeyRecorder.totalDistanceMeters.toFixed(1)}m)`,
+                textEn: `Turned Right (${journeyRecorder.totalDistanceMeters.toFixed(1)}m)`,
                 textHi: `दाईं ओर मुड़े (${journeyRecorder.totalDistanceMeters.toFixed(1)}m)`
               });
             }
@@ -1563,7 +1912,7 @@
                 angle: journeyRecorder.currentAngleDeg,
                 timeStr: timeStr,
                 eventType: "TURN_LEFT",
-                textEn: `Veered Left (${journeyRecorder.totalDistanceMeters.toFixed(1)}m)`,
+                textEn: `Turned Left (${journeyRecorder.totalDistanceMeters.toFixed(1)}m)`,
                 textHi: `बाईं ओर मुड़े (${journeyRecorder.totalDistanceMeters.toFixed(1)}m)`
               });
             }
@@ -1878,13 +2227,129 @@
     }
 
     /**
+     * Everyday Direction & Compass Orientation (Right, Left, Straight, North, South, East, West)
+     * Replaces confusing terms like "veer" with simple, natural language directions
+     */
+    const compassEngine = {
+      headingDeg: 0,
+      cardinalEn: "NORTH",
+      cardinalHi: "उत्तर",
+      hasCompass: false,
+
+      updateHeading(deg) {
+        this.headingDeg = ((deg % 360) + 360) % 360;
+        const h = this.headingDeg;
+        if (h >= 337.5 || h < 22.5) {
+          this.cardinalEn = "NORTH";
+          this.cardinalHi = "उत्तर";
+        } else if (h >= 22.5 && h < 67.5) {
+          this.cardinalEn = "NORTH-EAST";
+          this.cardinalHi = "उत्तर-पूर्व";
+        } else if (h >= 67.5 && h < 112.5) {
+          this.cardinalEn = "EAST";
+          this.cardinalHi = "पूर्व";
+        } else if (h >= 112.5 && h < 157.5) {
+          this.cardinalEn = "SOUTH-EAST";
+          this.cardinalHi = "दक्षिण-पूर्व";
+        } else if (h >= 157.5 && h < 202.5) {
+          this.cardinalEn = "SOUTH";
+          this.cardinalHi = "दक्षिण";
+        } else if (h >= 202.5 && h < 247.5) {
+          this.cardinalEn = "SOUTH-WEST";
+          this.cardinalHi = "दक्षिण-पश्चिम";
+        } else if (h >= 247.5 && h < 292.5) {
+          this.cardinalEn = "WEST";
+          this.cardinalHi = "पश्चिम";
+        } else {
+          this.cardinalEn = "NORTH-WEST";
+          this.cardinalHi = "उत्तर-पश्चिम";
+        }
+      },
+
+      getRelativeCardinal(offsetDeg) {
+        const targetDeg = ((this.headingDeg + offsetDeg) % 360 + 360) % 360;
+        if (targetDeg >= 315 || targetDeg < 45) return { en: "North", hi: "उत्तर" };
+        if (targetDeg >= 45 && targetDeg < 135) return { en: "East", hi: "पूर्व" };
+        if (targetDeg >= 135 && targetDeg < 225) return { en: "South", hi: "दक्षिण" };
+        return { en: "West", hi: "पश्चिम" };
+      }
+    };
+
+    if (typeof window !== 'undefined' && window.DeviceOrientationEvent) {
+      window.addEventListener('deviceorientation', (e) => {
+        let heading = null;
+        if (e.webkitCompassHeading !== undefined && e.webkitCompassHeading !== null) {
+          heading = e.webkitCompassHeading;
+        } else if (e.alpha !== null && e.alpha !== undefined) {
+          heading = (360 - e.alpha) % 360;
+        }
+        if (heading !== null && !isNaN(heading)) {
+          compassEngine.hasCompass = true;
+          compassEngine.updateHeading(heading);
+        }
+      }, true);
+    }
+
+    function getSimpleDirection(normX) {
+      const x = normX !== undefined ? normX : 0.5;
+      if (x < 0.38) {
+        const card = compassEngine.getRelativeCardinal(-90);
+        return {
+          code: "LEFT",
+          dirEn: "Left",
+          dirHi: "बाईं ओर",
+          actionEn: "Turn left",
+          actionHi: "बाएं मुड़ें",
+          cardinalEn: card.en,
+          cardinalHi: card.hi
+        };
+      } else if (x > 0.62) {
+        const card = compassEngine.getRelativeCardinal(90);
+        return {
+          code: "RIGHT",
+          dirEn: "Right",
+          dirHi: "दाईं ओर",
+          actionEn: "Turn right",
+          actionHi: "दाएं मुड़ें",
+          cardinalEn: card.en,
+          cardinalHi: card.hi
+        };
+      } else {
+        const card = compassEngine.getRelativeCardinal(0);
+        return {
+          code: "FORWARD",
+          dirEn: "Straight ahead",
+          dirHi: "सामने",
+          actionEn: "Proceed straight",
+          actionHi: "सीधे चलें",
+          cardinalEn: card.en,
+          cardinalHi: card.hi
+        };
+      }
+    }
+
+    function getClockDirection(normX, distance = 2.0) {
+      const simple = getSimpleDirection(normX);
+      return {
+        hour: simple.code === 'LEFT' ? 10 : (simple.code === 'RIGHT' ? 2 : 12),
+        clockEn: simple.dirEn,
+        clockHi: simple.dirHi,
+        steerCode: simple.code,
+        dirDescEn: simple.actionEn,
+        dirDescHi: simple.actionHi,
+        cardinalEn: simple.cardinalEn,
+        cardinalHi: simple.cardinalHi
+      };
+    }
+
+    /**
      * High-Precision 3-Sector Perspective Ground Raycaster
      * Calculates distance for: Left Sector, Center Corridor, and Right Sector
      * Instantly detects obstacle removal & clears 0.5m alarm without lag
      */
     function analyzeLiveOpticalFrame() {
       const video = document.getElementById('device-camera-video');
-      const isVideoPlaying = jarvisState.cameraStream && video && !video.paused && video.readyState >= 2;
+      const isVideoPlaying = jarvisState.cameraStream && video && !video.paused && (video.readyState >= 1) && (video.videoWidth > 0);
 
       initVisionDepthEngine();
 
@@ -1892,6 +2357,14 @@
         visionDepthEngine.sampleCtx.drawImage(video, 0, 0, 160, 120);
         const imgData = visionDepthEngine.sampleCtx.getImageData(0, 0, 160, 120);
         const d = imgData.data;
+
+        // Trigger Edge Neural Inference & Personal Object Matching
+        if (typeof objectDetectionEngine !== 'undefined') {
+          objectDetectionEngine.detectFrame(video);
+        }
+        if (typeof teachableVisionEngine !== 'undefined') {
+          teachableVisionEngine.checkLiveMatch(video);
+        }
 
         // Track frame-to-frame optical motion
         if (motionDetector.lastFrameData) {
@@ -1912,22 +2385,33 @@
           return d[idx] * 0.299 + d[idx+1] * 0.587 + d[idx+2] * 0.114;
         };
 
-        // ================= FULL-FRAME OCCLUSION & PROXIMITY DETECTOR =================
-        // Sample points across frame to compute luminance variance (depth signature)
+        // ================= ADVANCED CLASSIFIER: HAND ON LENS VS NATURAL WALL =================
+        // Sample frame grid to measure skin ratio, high-frequency texture & luminance
         let sumLum = 0, sumSqLum = 0, countLum = 0;
-        let centerSum = 0, centerSumSq = 0, centerCount = 0;
+        let skinCount = 0;
+        let edgeGradSum = 0;
 
-        for (let y = 14; y < 114; y += 10) {
-          for (let x = 12; x < 150; x += 14) {
-            const lum = getLum(x, y);
+        for (let y = 14; y < 114; y += 8) {
+          for (let x = 12; x < 150; x += 10) {
+            const idx = (y * 160 + x) * 4;
+            const r = d[idx], g = d[idx+1], b = d[idx+2];
+            const lum = r * 0.299 + g * 0.587 + b * 0.114;
             sumLum += lum;
             sumSqLum += lum * lum;
             countLum++;
 
-            if (x >= 50 && x <= 110) {
-              centerSum += lum;
-              centerSumSq += lum * lum;
-              centerCount++;
+            // Human skin tone signature (Kovac/Peer formula):
+            if (r > 55 && g > 38 && b > 20 && (r - g) >= 12 && (r - b) >= 18 && (g - b) >= 0) {
+              skinCount++;
+            }
+
+            // High-frequency texture gradient
+            if (x < 158 && y < 118) {
+              const idxR = (y * 160 + (x + 2)) * 4;
+              const idxD = ((y + 2) * 160 + x) * 4;
+              const lumR = d[idxR] * 0.299 + d[idxR+1] * 0.587 + d[idxR+2] * 0.114;
+              const lumD = d[idxD] * 0.299 + d[idxD+1] * 0.587 + d[idxD+2] * 0.114;
+              edgeGradSum += Math.abs(lumR - lum) + Math.abs(lumD - lum);
             }
           }
         }
@@ -1935,30 +2419,38 @@
         const meanLum = countLum > 0 ? (sumLum / countLum) : 0;
         const variance = countLum > 0 ? ((sumSqLum / countLum) - (meanLum * meanLum)) : 0;
         const stdDev = Math.sqrt(Math.max(0, variance));
+        const skinRatio = countLum > 0 ? (skinCount / countLum) : 0;
+        const avgGrad = countLum > 0 ? (edgeGradSum / countLum) : 0;
 
-        const centerMean = centerCount > 0 ? (centerSum / centerCount) : 0;
-        const centerVar = centerCount > 0 ? ((centerSumSq / centerCount) - (centerMean * centerMean)) : 0;
-        const centerStdDev = Math.sqrt(Math.max(0, centerVar));
+        // CRITICAL OCCLUSION SIGNATURES:
+        // 1. Extreme Defocus Blur: Lens cannot focus closer than 8cm. Hand/finger on lens has near-zero sharp texture (avgGrad < 7.0) AND uniform luminance (stdDev < 14.0)
+        // 2. Darkness / Eclipsed Lens: Hand/cloth covering lens cuts out light (meanLum < 32)
+        // 3. Human Skin Covering Lens: skinRatio > 0.35 AND out-of-focus blur (avgGrad < 9.5)
+        // 4. Uniform Paper/Cloth on Lens: stdDev < 9.5 and avgGrad < 5.5
+        const isSkinCovering = (skinRatio > 0.35 && avgGrad < 9.5);
+        const isDarkCovering = (meanLum < 32);
+        const isFlatSurfaceOnLens = (stdDev < 9.5 && avgGrad < 5.5);
+        const isOverexposedCovering = (meanLum > 242 && stdDev < 8.0);
 
-        // CRITICAL OCCLUSION / PROXIMITY DETECTION:
-        // When a hand, object, paper, cloth, or wall covers the webcam:
-        // 1. The scene variance collapses (stdDev < 15.0) because a single flat surface fills the lens!
-        // 2. OR the image goes completely dark (meanLum < 38) because the object blocks ambient light!
-        // 3. OR the center corridor is blocked by a uniform obstacle (centerStdDev < 12.0)!
-        const isCameraFullyCovered = (stdDev < 15.0) || (meanLum < 38) || (meanLum > 242);
-        const isCenterCovered = (centerStdDev < 12.0) || (centerMean < 38);
+        const isLensOccluded = isSkinCovering || isDarkCovering || isFlatSurfaceOnLens || isOverexposedCovering;
 
-        if (isCameraFullyCovered || isCenterCovered) {
-          // WEBCAM IS COVERED BY A THING / WALL DIRECTLY ON THE LENS (<0.3m)!
-          visionDepthEngine.distCenter = 0.30;
-          visionDepthEngine.distLeft = 0.35;
-          visionDepthEngine.distRight = 0.35;
-          visionDepthEngine.smoothedDistance = 0.30;
-          visionDepthEngine.detectedBox = { x: 0.20, y: 0.15, w: 0.60, h: 0.70 };
+        if (isLensOccluded) {
+          // WEBCAM LENS IS OCCLUDED BY HAND OR OBJECT (<5cm)!
+          visionDepthEngine.isLensOccluded = true;
+          visionDepthEngine.sceneType = isSkinCovering ? 'HAND_ON_LENS' : 'CAMERA_COVERED';
+          visionDepthEngine.distCenter = 0.05;
+          visionDepthEngine.distLeft = 0.05;
+          visionDepthEngine.distRight = 0.05;
+          visionDepthEngine.smoothedDistance = 0.05;
+          visionDepthEngine.detectedBox = { x: 0.10, y: 0.10, w: 0.80, h: 0.80 };
 
           applyRealtimeDistanceUpdate();
           return;
         }
+
+        // Camera lens is open and clear!
+        visionDepthEngine.isLensOccluded = false;
+        visionDepthEngine.sceneType = 'NATURAL_SCENE';
 
         // Floor baseline luminance (sampled from bottom edge at feet level, rows 114..118)
         let floorLum = 0, floorCount = 0;
@@ -1976,7 +2468,7 @@
           const totalColumns = Math.floor((maxX - minX) / stepX) + 1;
 
           // 1. Immediate close proximity check (y = 108..116)
-          // An obstacle or hand <= 0.5m directly covers the bottom rows of the frame
+          // An obstacle <= 0.5m directly covers the bottom rows of the frame
           let bottomHits = 0;
           for (let y = 116; y >= 108; y -= 2) {
             for (let x = minX; x <= maxX; x += stepX) {
@@ -2013,17 +2505,23 @@
             }
           }
 
-          // Convert vertical row to perspective distance (meters)
+          // Convert vertical row to calibrated physical perspective distance (meters)
           let distMeters = 3.6;
-          if (contactY >= 98) {
-            // 0.6m - 1.2m
-            distMeters = 0.6 + ((106 - contactY) / 8) * 0.6;
-          } else if (contactY >= 72) {
-            // 1.3m - 2.4m
-            distMeters = 1.3 + ((98 - contactY) / 26) * 1.1;
+          if (contactY >= 110) {
+            // 0.40m - 0.70m (Natural wall extremely close)
+            distMeters = 0.40 + ((118 - contactY) / 8) * 0.30;
+          } else if (contactY >= 92) {
+            // 0.70m - 1.40m (Wall in stopping / steering range)
+            distMeters = 0.70 + ((110 - contactY) / 18) * 0.70;
+          } else if (contactY >= 70) {
+            // 1.40m - 2.40m (Medium distance room wall)
+            distMeters = 1.40 + ((92 - contactY) / 22) * 1.00;
+          } else if (contactY >= 48) {
+            // 2.40m - 3.60m (Far wall / corridor)
+            distMeters = 2.40 + ((70 - contactY) / 22) * 1.20;
           } else {
-            // 2.5m - 3.8m (clear open corridor)
-            distMeters = 2.5 + ((72 - Math.max(44, contactY)) / 28) * 1.3;
+            // 3.60m - 4.50m (Open clear space)
+            distMeters = 3.60 + ((48 - Math.max(36, contactY)) / 12) * 0.90;
           }
 
           return { dist: distMeters, contactY, isClose: false };
@@ -2092,72 +2590,169 @@
      * Decision Engine: Steering Guidance, Wall Distance & Critical 0.5m Alert
      */
     function applyRealtimeDistanceUpdate() {
+      const now = Date.now();
+
+      // ================= 0. CAMERA OCCLUSION (HAND OR OBJECT ON LENS) =================
+      if (visionDepthEngine.isLensOccluded) {
+        visionDepthEngine.wasInCriticalStop = true;
+        visionDepthEngine.currentRecommendedSteering = 'STOP';
+
+        const occlText = '⚠️ CAMERA BLOCKED (HAND ON LENS)';
+        const distVal = document.getElementById('live-distance-value');
+        const distBar = document.getElementById('live-distance-bar');
+        const reticleLabel = document.getElementById('hud-reticle-label');
+        const telePath = document.getElementById('tele-path-status');
+        const teleSteer = document.getElementById('tele-steering-guide');
+        const teleRisk = document.getElementById('tele-risk-score');
+        const objNameEn = document.getElementById('obj-name-en');
+        const objNameHi = document.getElementById('obj-name-hi');
+
+        if (distVal) {
+          distVal.innerText = `0.0m [${occlText}]`;
+          distVal.className = 'text-amber-400 font-bold text-xs animate-pulse';
+        }
+        if (distBar) {
+          distBar.style.width = '100%';
+          distBar.className = 'bg-amber-500 h-full transition-all duration-150 animate-pulse';
+        }
+        if (reticleLabel) reticleLabel.innerText = occlText;
+        if (telePath) {
+          telePath.innerText = 'LENS BLOCKED (0.0m)';
+          telePath.className = 'text-amber-400 font-bold';
+        }
+        if (teleSteer) {
+          teleSteer.innerText = 'UNCOVER CAMERA LENS';
+          teleSteer.className = 'text-amber-400 font-bold';
+        }
+        if (teleRisk) {
+          teleRisk.innerText = 'LENS COVERED (100%)';
+          teleRisk.className = 'text-amber-400 font-bold';
+        }
+        if (objNameEn) objNameEn.innerText = 'HAND / OBJECT ON CAMERA LENS';
+        if (objNameHi) objNameHi.innerText = 'कैमरा हाथ या वस्तु से ढका है';
+
+        if (now - (visionDepthEngine.lastOcclusionAlertTime || 0) > 3500) {
+          visionDepthEngine.lastOcclusionAlertTime = now;
+          playStarkChime('critical-stop');
+          const occlAlert = jarvisState.language === 'hi'
+            ? "सावधान: कैमरा हाथ या वस्तु से ढका हुआ है। कृपया कैमरा साफ करें।"
+            : "Warning: Camera lens is covered by your hand or an object. Please uncover the camera.";
+          interruptAndAlert(occlAlert);
+        }
+        return;
+      }
+
       const dc = Math.max(0.25, Math.min(visionDepthEngine.distCenter, 5.0));
       const dl = Math.max(0.3, Math.min(visionDepthEngine.distLeft, 5.0));
       const dr = Math.max(0.3, Math.min(visionDepthEngine.distRight, 5.0));
-
       const formatted = dc.toFixed(1) + 'm';
-      const now = Date.now();
 
-      // Determine Steering Direction
+      // Compass headings for current and turn directions
+      const currentCard = compassEngine.getRelativeCardinal(0);
+      const rightCard = compassEngine.getRelativeCardinal(90);
+      const leftCard = compassEngine.getRelativeCardinal(-90);
+      const backCard = compassEngine.getRelativeCardinal(180);
+
+      // Determine Steering Direction (Natural: Right, Left, Straight, Back)
       let recommendedSteer = 'FORWARD';
-      let steerGuideText = 'PROCEED STRAIGHT ↑';
+      let steerGuideText = `↑ GO STRAIGHT [${currentCard.en.toUpperCase()}]`;
       let steerColor = 'text-emerald-400';
 
-      // ================= 1. CRITICAL 0.5 METER STOP ALERT =================
-      if (dc <= 0.55) {
+      // Check for obstacles in path (Glass, Motorcycle, Bed, Person, etc.)
+      const obstacleHazard = (typeof objectDetectionEngine !== 'undefined') ? objectDetectionEngine.getClosestObstacleInPath() : null;
+      const isObstacleInPath = obstacleHazard && obstacleHazard.distance <= 2.6;
+
+      // ================= 1. PATH OBSTACLES (GLASS, MOTORCYCLE, BED, PERSON) PRIORITY =================
+      if (isObstacleInPath) {
+        const oDist = obstacleHazard.distance.toFixed(1);
+        const turnRight = (obstacleHazard.sector === 'LEFT') || (dr >= dl && dr >= 1.4);
+        recommendedSteer = turnRight ? 'RIGHT' : 'LEFT';
+        const targetCard = turnRight ? rightCard : leftCard;
+
+        const icon = obstacleHazard.isHuman ? '👤' : (obstacleHazard.isGlassOrCup ? '🥛' : (obstacleHazard.isVehicle ? '🏍️' : (obstacleHazard.isFurniture ? '🛏️' : '⚠️')));
+        steerGuideText = `${icon} ${obstacleHazard.nameEn} IN PATH (${oDist}m) ➔ TURN ${turnRight ? 'RIGHT' : 'LEFT'} [${targetCard.en.toUpperCase()}]`;
+        steerColor = 'text-amber-400 font-bold';
+
+        if (now - (visionDepthEngine.lastObstacleAlertTime || 0) > 3000) {
+          visionDepthEngine.lastObstacleAlertTime = now;
+          playStarkChime(turnRight ? 'steer-right' : 'steer-left');
+          triggerHaptic('warning');
+
+          let alertMsg = '';
+          if (jarvisState.language === 'hi') {
+            if (obstacleHazard.isGlassOrCup) {
+              alertMsg = `सावधान: रास्ते में ${obstacleHazard.nameHi} है, दूरी ${oDist} मीटर। ${turnRight ? 'दाएं' : 'बाएं'} मुड़ें, ${targetCard.hi} दिशा में।`;
+            } else if (obstacleHazard.isHuman) {
+              alertMsg = `सावधान: सामने व्यक्ति है, दूरी ${oDist} मीटर। ${turnRight ? 'दाएं' : 'बाएं'} मुड़ें, ${targetCard.hi} दिशा में।`;
+            } else {
+              alertMsg = `सावधान: रास्ते में ${obstacleHazard.nameHi} है, दूरी ${oDist} मीटर। ${turnRight ? 'दाएं' : 'बाएं'} मुड़ें, ${targetCard.hi} दिशा में।`;
+            }
+          } else {
+            if (obstacleHazard.isGlassOrCup) {
+              alertMsg = `Caution: Glass on the floor in your path, ${oDist} meters. Turn ${turnRight ? 'right' : 'left'} towards ${targetCard.en}.`;
+            } else if (obstacleHazard.isHuman) {
+              alertMsg = `Caution: Person ahead in your path, ${oDist} meters. Turn ${turnRight ? 'right' : 'left'} towards ${targetCard.en}.`;
+            } else {
+              alertMsg = `Warning: ${obstacleHazard.nameEn} in your path, ${oDist} meters ahead. Turn ${turnRight ? 'right' : 'left'} towards ${targetCard.en}.`;
+            }
+          }
+          speakJarvis(alertMsg);
+        }
+      }
+      // ================= 2. NATURAL WALL CRITICAL STOP (<= 0.55m) =================
+      else if (dc <= 0.55) {
         recommendedSteer = 'STOP';
-        steerGuideText = dc <= 0.35 ? '🛑 CRITICAL STOP (0.3M - OBSTACLE)' : '🛑 CRITICAL STOP (0.5M)';
+        steerGuideText = `🛑 STOP: WALL AHEAD (${formatted})`;
         steerColor = 'text-red-400 animate-pulse';
         visionDepthEngine.wasInCriticalStop = true;
 
-        // Preemptively interrupt with urgent siren every 2.5 seconds while within 0.5m
         if (now - (visionDepthEngine.lastCriticalAlertTime || 0) > 2500) {
           visionDepthEngine.lastCriticalAlertTime = now;
           playStarkChime('critical-stop');
+          triggerHaptic('danger');
           const stopAlert = jarvisState.language === 'hi'
-            ? (dc <= 0.35 ? "रुकिए! सामने रुकावट है, केवल शून्य दशमलव तीन मीटर! आगे न बढ़ें!" : "रुकिए! सामने दीवार है, केवल शून्य दशमलव पाँच मीटर! आगे न बढ़ें!")
-            : (dc <= 0.35 ? "STOP! Obstacle directly ahead, zero point three meters! Stop immediately!" : "STOP! Wall directly ahead, zero point five meters! Stop immediately!");
+            ? `रुकिए! सामने दीवार है, केवल ${formatted}! आगे न बढ़ें!`
+            : `STOP! Wall directly ahead, ${formatted}! Stop immediately!`;
           interruptAndAlert(stopAlert);
         }
       } 
-      // ================= 2. STEERING GUIDANCE (CENTER BLOCKED <= 1.4M) =================
+      // ================= 3. NATURAL WALL STEERING GUIDANCE (0.55m - 1.4m) =================
       else if (dc <= 1.4) {
         visionDepthEngine.wasInCriticalStop = false;
         if (dr > dl && dr >= 1.7) {
           recommendedSteer = 'RIGHT';
-          steerGuideText = `VEER RIGHT ➔ (${dr.toFixed(1)}m)`;
+          steerGuideText = `WALL AHEAD (${formatted}) ➔ TURN RIGHT [${rightCard.en.toUpperCase()}]`;
           steerColor = 'text-yellow-400';
         } else if (dl > dr && dl >= 1.7) {
           recommendedSteer = 'LEFT';
-          steerGuideText = `⬅ VEER LEFT (${dl.toFixed(1)}m)`;
+          steerGuideText = `WALL AHEAD (${formatted}) ⬅ TURN LEFT [${leftCard.en.toUpperCase()}]`;
           steerColor = 'text-yellow-400';
         } else {
           recommendedSteer = 'TURN_AROUND';
-          steerGuideText = '🔄 DEAD END - TURN BACK';
+          steerGuideText = `🔄 DEAD END ➔ TURN BACK [${backCard.en.toUpperCase()}]`;
           steerColor = 'text-red-400';
         }
       } 
-      // ================= 3. CLEAR CORRIDOR (CENTER > 1.4M) =================
+      // ================= 4. CLEAR CORRIDOR (> 1.4M) =================
       else {
         visionDepthEngine.wasInCriticalStop = false;
         recommendedSteer = 'FORWARD';
         if (dl < 0.9) {
-          steerGuideText = `STRAIGHT ↑ (WALL LEFT ${dl.toFixed(1)}m)`;
+          steerGuideText = `↑ GO STRAIGHT [${currentCard.en.toUpperCase()}] (WALL LEFT ${dl.toFixed(1)}m)`;
           steerColor = 'text-cyan-300';
         } else if (dr < 0.9) {
-          steerGuideText = `STRAIGHT ↑ (WALL RIGHT ${dr.toFixed(1)}m)`;
+          steerGuideText = `↑ GO STRAIGHT [${currentCard.en.toUpperCase()}] (WALL RIGHT ${dr.toFixed(1)}m)`;
           steerColor = 'text-cyan-300';
         } else {
-          steerGuideText = `PROCEED STRAIGHT ↑ (${formatted})`;
+          steerGuideText = `↑ GO STRAIGHT [${currentCard.en.toUpperCase()}] (${formatted})`;
           steerColor = 'text-emerald-400';
         }
       }
 
       visionDepthEngine.currentRecommendedSteering = recommendedSteer;
 
-      // ================= 4. AUTONOMOUS WALKING COPILOT VOICE LOOP =================
-      if (jarvisState.isWalkingCopilotActive && dc > 0.55) {
+      // ================= 5. AUTONOMOUS WALKING COPILOT VOICE LOOP =================
+      if (jarvisState.isWalkingCopilotActive && dc > 0.55 && !isHumanInPath) {
         const steerChanged = recommendedSteer !== visionDepthEngine.lastSpokenSteering;
         const timeElapsed = now - (visionDepthEngine.lastCopilotAnnounceTime || 0);
 
@@ -2170,8 +2765,8 @@
         }
       }
 
-      // 5. Update UI Telemetry & Badges
-      let zoneStatus = dc <= 0.55 ? 'CRITICAL HAZARD' : (dc < 1.4 ? 'OBSTACLE AHEAD' : 'CLEAR CORRIDOR');
+      // 6. Update UI Telemetry & Badges
+      let zoneStatus = dc <= 0.55 ? 'CRITICAL HAZARD' : (dc < 1.4 ? 'WALL AHEAD' : 'CLEAR CORRIDOR');
       let riskScore = Math.max(8, Math.min(98, Math.round((1 - (dc / 4.2)) * 100)));
 
       const distVal = document.getElementById('live-distance-value');
@@ -2228,14 +2823,177 @@
         objRange.innerText = `${formatted} [${zoneStatus}]`;
         objRange.className = `${steerColor} font-bold`;
       }
-      if (objNameEn) objNameEn.innerText = steerGuideText;
-      if (objNameHi) objNameHi.innerText = dc <= 0.55 ? "रुकिए! सामने दीवार" : (recommendedSteer === 'RIGHT' ? "दाईं ओर मुड़ें" : (recommendedSteer === 'LEFT' ? "बाईं ओर मुड़ें" : "सीधे चलें"));
+      if (objNameEn && !teachableVisionEngine.targetMatch && !(objectDetectionEngine && objectDetectionEngine.detections.length > 0)) {
+        objNameEn.innerText = steerGuideText;
+      }
+      if (objNameHi && !teachableVisionEngine.targetMatch && !(objectDetectionEngine && objectDetectionEngine.detections.length > 0)) {
+        objNameHi.innerText = dc <= 0.55 ? "रुकिए! सामने दीवार" : (recommendedSteer === 'RIGHT' ? `दाएं मुड़ें (${rightCard.hi})` : (recommendedSteer === 'LEFT' ? `बाएं मुड़ें (${leftCard.hi})` : `सीधे चलें (${currentCard.hi})`));
+      }
+
+      // 7. Update Dedicated "OBJECT IN FRONT OF ME" Section
+      updateObjectInFrontUI();
     }
 
     /**
-     * Vocal Steering Guidance Announcement (with 3D Spatial Audio)
+     * Dedicated Section: Updates "OBJECT IN FRONT OF ME" (सामने की वस्तुएं)
+     */
+    function updateObjectInFrontUI() {
+      const iconEl = document.getElementById('front-obj-icon');
+      const catEl = document.getElementById('front-obj-category');
+      const confEl = document.getElementById('front-obj-conf');
+      const nameEnEl = document.getElementById('front-obj-name-en');
+      const nameHiEl = document.getElementById('front-obj-name-hi');
+      const distEl = document.getElementById('front-obj-dist');
+      const hazardTagEl = document.getElementById('front-hazard-tag');
+      const dirEl = document.getElementById('front-obj-direction');
+      const guideEl = document.getElementById('front-obj-guidance');
+      const countEl = document.getElementById('front-objects-count');
+      const listEl = document.getElementById('front-objects-list');
+
+      if (!nameEnEl) return;
+
+      const currentCard = compassEngine ? compassEngine.getRelativeCardinal(0) : { en: 'North', hi: 'उत्तर' };
+      const rightCard = compassEngine ? compassEngine.getRelativeCardinal(90) : { en: 'East', hi: 'पूर्व' };
+      const leftCard = compassEngine ? compassEngine.getRelativeCardinal(-90) : { en: 'West', hi: 'पश्चिम' };
+
+      const detections = (typeof objectDetectionEngine !== 'undefined' && objectDetectionEngine.detections) ? objectDetectionEngine.detections : [];
+      const obstacleHazard = (typeof objectDetectionEngine !== 'undefined') ? objectDetectionEngine.getClosestObstacleInPath() : null;
+      const dc = (typeof visionDepthEngine !== 'undefined') ? visionDepthEngine.distCenter : 3.5;
+      const steer = (typeof visionDepthEngine !== 'undefined') ? visionDepthEngine.currentRecommendedSteering : 'FORWARD';
+
+      // 1. Primary In-Front Entity
+      if (obstacleHazard) {
+        const oDist = obstacleHazard.distance.toFixed(1);
+        const icon = obstacleHazard.isHuman ? '👤' : (obstacleHazard.isGlassOrCup ? '🥛' : (obstacleHazard.isVehicle ? '🏍️' : (obstacleHazard.isFurniture ? '🛏️' : '📦')));
+        const turnRight = (obstacleHazard.sector === 'LEFT') || ((typeof visionDepthEngine !== 'undefined') && visionDepthEngine.distRight >= visionDepthEngine.distLeft);
+        const targetCard = turnRight ? rightCard : leftCard;
+
+        if (iconEl) iconEl.innerText = icon;
+        if (catEl) catEl.innerText = obstacleHazard.isInPath ? '⚠️ OBSTACLE IN WALKING PATH' : 'OBJECT IN VIEW';
+        if (confEl) confEl.innerText = `• ${Math.round(obstacleHazard.score * 100)}% MATCH`;
+        if (nameEnEl) nameEnEl.innerText = obstacleHazard.nameEn;
+        if (nameHiEl) nameHiEl.innerText = obstacleHazard.nameHi;
+        if (distEl) {
+          distEl.innerText = `${oDist}m`;
+          distEl.className = 'font-hud text-lg font-black text-amber-400 block leading-none';
+        }
+        if (hazardTagEl) {
+          hazardTagEl.innerText = obstacleHazard.isInPath ? '⚠️ IN PATH' : 'NEARBY';
+          hazardTagEl.className = 'inline-block mt-1 px-1.5 py-0.5 rounded text-[8px] font-mono-hud font-bold bg-amber-950 text-amber-300 border border-amber-500/50 animate-pulse';
+        }
+        if (dirEl) dirEl.innerText = `${obstacleHazard.simpleDir.toUpperCase()} [${obstacleHazard.cardinalEn.toUpperCase()}]`;
+        if (guideEl) {
+          guideEl.innerText = `➔ TURN ${turnRight ? 'RIGHT' : 'LEFT'} [${targetCard.en.toUpperCase()}]`;
+          guideEl.className = 'text-amber-300 font-bold';
+        }
+      } else if (dc <= 1.4) {
+        // Natural Wall ahead
+        if (iconEl) iconEl.innerText = '🧱';
+        if (catEl) catEl.innerText = dc <= 0.55 ? '🛑 CRITICAL WALL HAZARD' : 'WALL BOUNDARY';
+        if (confEl) confEl.innerText = '• OPTICAL RAYCAST';
+        if (nameEnEl) nameEnEl.innerText = dc <= 0.55 ? 'WALL AHEAD (STOP)' : 'CORRIDOR WALL';
+        if (nameHiEl) nameHiEl.innerText = dc <= 0.55 ? 'सामने दीवार है (रुकिए)' : 'दीवार';
+        if (distEl) {
+          distEl.innerText = `${dc.toFixed(1)}m`;
+          distEl.className = dc <= 0.55 ? 'font-hud text-lg font-black text-red-400 block leading-none animate-pulse' : 'font-hud text-lg font-black text-yellow-400 block leading-none';
+        }
+        if (hazardTagEl) {
+          hazardTagEl.innerText = dc <= 0.55 ? '🛑 DANGER STOP' : 'TURN AVOID';
+          hazardTagEl.className = dc <= 0.55 ? 'inline-block mt-1 px-1.5 py-0.5 rounded text-[8px] font-mono-hud font-bold bg-red-950 text-red-300 border border-red-500/50 animate-pulse' : 'inline-block mt-1 px-1.5 py-0.5 rounded text-[8px] font-mono-hud font-bold bg-yellow-950 text-yellow-300 border border-yellow-500/50';
+        }
+        if (dirEl) dirEl.innerText = `STRAIGHT [${currentCard.en.toUpperCase()}]`;
+        if (guideEl) {
+          const steerText = steer === 'RIGHT' ? `➔ TURN RIGHT [${rightCard.en.toUpperCase()}]` : (steer === 'LEFT' ? `⬅ TURN LEFT [${leftCard.en.toUpperCase()}]` : (steer === 'STOP' ? '🛑 STOP' : '🔄 TURN BACK'));
+          guideEl.innerText = steerText;
+          guideEl.className = dc <= 0.55 ? 'text-red-400 font-bold' : 'text-yellow-300 font-bold';
+        }
+      } else {
+        // Path Clear
+        if (iconEl) iconEl.innerText = '✅';
+        if (catEl) catEl.innerText = 'WALKING PATH';
+        if (confEl) confEl.innerText = '• OPTICAL SENSOR';
+        if (nameEnEl) nameEnEl.innerText = 'CLEAR PATHWAY';
+        if (nameHiEl) nameHiEl.innerText = 'सामने का रास्ता साफ है';
+        if (distEl) {
+          distEl.innerText = `${dc.toFixed(1)}m`;
+          distEl.className = 'font-hud text-lg font-black text-emerald-400 block leading-none';
+        }
+        if (hazardTagEl) {
+          hazardTagEl.innerText = 'CLEAR PATH';
+          hazardTagEl.className = 'inline-block mt-1 px-1.5 py-0.5 rounded text-[8px] font-mono-hud font-bold bg-emerald-950 text-emerald-300 border border-emerald-500/50';
+        }
+        if (dirEl) dirEl.innerText = `AHEAD [${currentCard.en.toUpperCase()}]`;
+        if (guideEl) {
+          guideEl.innerText = `PROCEED STRAIGHT ↑ [${currentCard.en.toUpperCase()}]`;
+          guideEl.className = 'text-emerald-300 font-bold';
+        }
+      }
+
+      // 2. Populate All Objects in View Chips
+      if (countEl) countEl.innerText = `${detections.length} DETECTED`;
+      if (listEl) {
+        if (detections.length === 0) {
+          listEl.innerHTML = `<span class="text-[9px] font-mono-hud text-slate-400 italic py-1 px-2">Path clear for ${dc.toFixed(1)}m. No obstacles detected.</span>`;
+        } else {
+          listEl.innerHTML = detections.map(d => {
+            const icon = d.isHuman ? '👤' : (d.isGlassOrCup ? '🥛' : (d.isVehicle ? '🏍️' : (d.isFurniture ? '🛏️' : '📦')));
+            const badgeBg = d.isInPath ? 'bg-amber-950/80 border-amber-500/60 text-amber-200' : 'bg-slate-900/80 border-slate-700/60 text-slate-300';
+            const inPathDot = d.isInPath ? '<span class="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping"></span>' : '';
+            return `
+              <div class="flex items-center gap-1.5 px-2 py-1 rounded border text-[9px] font-mono-hud ${badgeBg}">
+                <span>${icon}</span>
+                <span class="font-bold">${d.nameEn}</span>
+                <span class="text-cyan-300">${d.distance.toFixed(1)}m</span>
+                <span class="text-[8px] text-slate-400">(${d.simpleDir})</span>
+                ${inPathDot}
+              </div>
+            `;
+          }).join('');
+        }
+      }
+    }
+
+    /**
+     * Vocal Steering Guidance Announcement (Simple Everyday Directions & Compass)
      */
     function announceSteeringGuidance(isAutoCadence = false) {
+      if (visionDepthEngine.isLensOccluded) {
+        playStarkChime('critical-stop');
+        const msg = jarvisState.language === 'hi'
+          ? "सावधान: कैमरा हाथ या वस्तु से ढका हुआ है। कृपया कैमरा साफ करें।"
+          : "Warning: Camera lens is covered by your hand or an object. Please uncover the camera.";
+        speakJarvis(msg, true);
+        return;
+      }
+
+      // Check for human pedestrian or obstacles in path (Glass, Motorcycle, Bed, etc.)
+      const obstacleHazard = (typeof objectDetectionEngine !== 'undefined') ? objectDetectionEngine.getClosestObstacleInPath() : null;
+      if (obstacleHazard && obstacleHazard.distance <= 2.6) {
+        const oDist = obstacleHazard.distance.toFixed(1);
+        const turnRight = visionDepthEngine.currentRecommendedSteering === 'RIGHT' || (visionDepthEngine.distRight >= visionDepthEngine.distLeft);
+        const card = compassEngine.getRelativeCardinal(turnRight ? 90 : -90);
+        let msg = '';
+        if (jarvisState.language === 'hi') {
+          if (obstacleHazard.isGlassOrCup) {
+            msg = `सावधान: रास्ते में ${obstacleHazard.nameHi} है, दूरी ${oDist} मीटर। ${turnRight ? 'दाएं' : 'बाएं'} मुड़ें, ${card.hi} दिशा की ओर।`;
+          } else if (obstacleHazard.isHuman) {
+            msg = `सामने व्यक्ति है, दूरी ${oDist} मीटर। ${turnRight ? 'दाएं' : 'बाएं'} मुड़ें, ${card.hi} दिशा की ओर।`;
+          } else {
+            msg = `सावधान: रास्ते में ${obstacleHazard.nameHi} है, दूरी ${oDist} मीटर। ${turnRight ? 'दाएं' : 'बाएं'} मुड़ें, ${card.hi} दिशा की ओर।`;
+          }
+        } else {
+          if (obstacleHazard.isGlassOrCup) {
+            msg = `Caution: Glass on the floor in your path, ${oDist} meters. Turn ${turnRight ? 'right' : 'left'} towards ${card.en}.`;
+          } else if (obstacleHazard.isHuman) {
+            msg = `Person ahead in your path, ${oDist} meters. Turn ${turnRight ? 'right' : 'left'} towards ${card.en}.`;
+          } else {
+            msg = `Warning: ${obstacleHazard.nameEn} in your path, ${oDist} meters ahead. Turn ${turnRight ? 'right' : 'left'} towards ${card.en}.`;
+          }
+        }
+        speakJarvis(msg);
+        return;
+      }
+
       const dc = visionDepthEngine.distCenter;
       const dl = visionDepthEngine.distLeft;
       const dr = visionDepthEngine.distRight;
@@ -2252,32 +3010,174 @@
 
       if (steer === 'RIGHT') {
         playStarkChime('steer-right'); // Panned to right ear!
+        const card = compassEngine.getRelativeCardinal(90);
         const msg = jarvisState.language === 'hi'
-          ? (isAutoCadence ? `सामने दीवार है। दाईं ओर मुड़ें।` : `सामने दीवार ${dc.toFixed(1)} मीटर पर है। दाईं ओर रास्ता खुला है ${dr.toFixed(1)} मीटर तक। दाईं ओर मुड़ें।`)
-          : (isAutoCadence ? `Wall ahead. Veer right.` : `Wall ahead at ${dc.toFixed(1)} meters. Clear path on your right for ${dr.toFixed(1)} meters. Turn right.`);
+          ? (isAutoCadence ? `सामने दीवार है। दाएँ मुड़ें, ${card.hi} दिशा में।` : `सामने दीवार ${dc.toFixed(1)} मीटर पर है। दाएँ मुड़ें, ${card.hi} दिशा की ओर।`)
+          : (isAutoCadence ? `Wall ahead. Turn right towards ${card.en}.` : `Wall ahead at ${dc.toFixed(1)} meters. Clear path on your right. Turn right towards ${card.en}.`);
         speakJarvis(msg);
         return;
       }
 
       if (steer === 'LEFT') {
         playStarkChime('steer-left'); // Panned to left ear!
+        const card = compassEngine.getRelativeCardinal(-90);
         const msg = jarvisState.language === 'hi'
-          ? (isAutoCadence ? `सामने दीवार है। बाईं ओर मुड़ें।` : `सामने दीवार ${dc.toFixed(1)} मीटर पर है। बाईं ओर रास्ता खुला है ${dl.toFixed(1)} मीटर तक। बाईं ओर मुड़ें।`)
-          : (isAutoCadence ? `Wall ahead. Veer left.` : `Wall ahead at ${dc.toFixed(1)} meters. Clear path on your left for ${dl.toFixed(1)} meters. Turn left.`);
+          ? (isAutoCadence ? `सामने दीवार है। बाएँ मुड़ें, ${card.hi} दिशा में।` : `सामने दीवार ${dc.toFixed(1)} मीटर पर है। बाएँ मुड़ें, ${card.hi} दिशा की ओर।`)
+          : (isAutoCadence ? `Wall ahead. Turn left towards ${card.en}.` : `Wall ahead at ${dc.toFixed(1)} meters. Clear path on your left. Turn left towards ${card.en}.`);
+        speakJarvis(msg);
+        return;
+      }
+
+      if (steer === 'TURN_AROUND') {
+        playStarkChime('critical-stop');
+        const card = compassEngine.getRelativeCardinal(180);
+        const msg = jarvisState.language === 'hi'
+          ? `रास्ता बंद है। पीछे मुड़ें, ${card.hi} दिशा की ओर।`
+          : `Dead end. Turn back towards ${card.en}.`;
         speakJarvis(msg);
         return;
       }
 
       // Forward
       playStarkChime('proceed-straight');
+      const card = compassEngine.getRelativeCardinal(0);
       const sideNote = dl < 1.0 
         ? (jarvisState.language === 'hi' ? `बाईं तरफ दीवार ${dl.toFixed(1)} मीटर पर है। ` : `Wall on your left at ${dl.toFixed(1)} meters. `)
         : (dr < 1.0 ? (jarvisState.language === 'hi' ? `दाईं तरफ दीवार ${dr.toFixed(1)} मीटर पर है। ` : `Wall on your right at ${dr.toFixed(1)} meters. `) : '');
 
       const msg = jarvisState.language === 'hi'
-        ? (isAutoCadence ? `${sideNote}रास्ता साफ है, सीधे चलें।` : `${sideNote}सामने का रास्ता ${dc.toFixed(1)} मीटर तक साफ है। सीधे चलें।`)
-        : (isAutoCadence ? `${sideNote}Path clear, continue straight.` : `${sideNote}Path directly ahead is clear for ${dc.toFixed(1)} meters. Proceed straight.`);
+        ? (isAutoCadence ? `${sideNote}रास्ता साफ है। सीधे ${card.hi} दिशा में चलें।` : `${sideNote}सामने रास्ता ${dc.toFixed(1)} मीटर तक साफ है। सीधे ${card.hi} दिशा में चलें।`)
+        : (isAutoCadence ? `${sideNote}Path clear. Go straight towards ${card.en}.` : `${sideNote}Path directly ahead is clear for ${dc.toFixed(1)} meters. Go straight towards ${card.en}.`);
       speakJarvis(msg);
+    }
+
+    /**
+     * Comprehensive Scene Description (Path Clearance, Objects, & Boundaries)
+     */
+    function announceSceneDescription() {
+      playStarkChime('ack');
+
+      // Check lens occlusion
+      if (visionDepthEngine.isLensOccluded) {
+        const occl = jarvisState.language === 'hi'
+          ? "कैमरा हाथ या किसी वस्तु से ढका हुआ है। सामने देखने के लिए कृपया लेंस को साफ करें।"
+          : "Camera lens is currently occluded by your hand or an object. Please uncover the lens to see ahead.";
+        speakJarvis(occl);
+        return;
+      }
+
+      const dc = visionDepthEngine.distCenter;
+      const dl = visionDepthEngine.distLeft;
+      const dr = visionDepthEngine.distRight;
+
+      const objectsPartsEn = [];
+      const objectsPartsHi = [];
+
+      // Check custom personal items
+      if (typeof teachableVisionEngine !== 'undefined' && teachableVisionEngine.targetMatch) {
+        const item = teachableVisionEngine.targetMatch.item;
+        objectsPartsEn.push(`your personal item ${item.nameEn} directly ahead`);
+        objectsPartsHi.push(`आपकी वस्तु ${item.nameHi} सामने`);
+      }
+
+      // Check detected COCO objects & humans
+      if (typeof objectDetectionEngine !== 'undefined' && objectDetectionEngine.detections.length > 0) {
+        for (const det of objectDetectionEngine.detections.slice(0, 3)) {
+          const inPathNoteEn = det.isInPath ? ' directly in your path' : '';
+          const inPathNoteHi = det.isInPath ? ' रास्ते में' : '';
+          const dirDescEn = det.simpleDir === 'Straight ahead' ? `straight ahead towards ${det.cardinalEn}` : `on your ${det.simpleDir.toLowerCase()} towards ${det.cardinalEn}`;
+          const dirDescHi = det.simpleDir === 'Straight ahead' ? `सीधे सामने (${det.cardinalHi} दिशा में)` : `${det.simpleDirHi} (${det.cardinalHi} दिशा में)`;
+          if (det.isHuman) {
+            objectsPartsEn.push(`a person${inPathNoteEn} ${dirDescEn} at ${det.distance.toFixed(1)} meters`);
+            objectsPartsHi.push(`${dirDescHi}${inPathNoteHi} ${det.distance.toFixed(1)} मीटर पर व्यक्ति`);
+          } else {
+            objectsPartsEn.push(`a ${det.nameEn.toLowerCase()}${inPathNoteEn} ${dirDescEn} at ${det.distance.toFixed(1)} meters`);
+            objectsPartsHi.push(`${dirDescHi}${inPathNoteHi} ${det.distance.toFixed(1)} मीटर पर ${det.nameHi}`);
+          }
+        }
+      }
+
+      let msg = '';
+      if (jarvisState.language === 'hi') {
+        if (objectsPartsHi.length > 0) {
+          msg = `सामने ${dc.toFixed(1)} मीटर तक रास्ता है। दृश्य में: ${objectsPartsHi.join(', ')} उपस्थित है।`;
+        } else {
+          msg = `दीवार की दूरी: सामने ${dc.toFixed(1)} मीटर, बाईं तरफ ${dl.toFixed(1)} मीटर, और दाईं तरफ ${dr.toFixed(1)} मीटर है। सामने का रास्ता साफ है।`;
+        }
+      } else {
+        if (objectsPartsEn.length > 0) {
+          msg = `Corridor ahead is clear for ${dc.toFixed(1)} meters. In view: ${objectsPartsEn.join(', ')}.`;
+        } else {
+          msg = `Wall distance: Directly ahead ${dc.toFixed(1)} meters. Left side ${dl.toFixed(1)} meters. Right side ${dr.toFixed(1)} meters. Path is open.`;
+        }
+      }
+
+      speakJarvis(msg);
+    }
+
+    function queryObjectLocation(query) {
+      playStarkChime('ack');
+      const cleanQ = query.toLowerCase();
+
+      // Check custom items
+      if (typeof teachableVisionEngine !== 'undefined') {
+        const matchedCustom = teachableVisionEngine.customItems.find(it => 
+          cleanQ.includes(it.nameEn.toLowerCase()) || cleanQ.includes(it.nameHi.toLowerCase())
+        );
+
+        if (matchedCustom) {
+          if (teachableVisionEngine.targetMatch && teachableVisionEngine.targetMatch.item.id === matchedCustom.id) {
+            const d = visionDepthEngine.distCenter.toFixed(1);
+            const msg = jarvisState.language === 'hi'
+              ? `आपकी ${matchedCustom.nameHi} सामने दिखाई दे रही है, लगभग ${d} मीटर दूर।`
+              : `Your ${matchedCustom.nameEn} is in view directly ahead, approximately ${d} meters away.`;
+            speakJarvis(msg);
+            return;
+          } else {
+            const msg = jarvisState.language === 'hi'
+              ? `${matchedCustom.nameHi} वर्तमान कैमरे में नहीं दिख रही है। कृपया कैमरा धीरे-धीरे घुमाएं।`
+              : `${matchedCustom.nameEn} is not currently visible in camera view. Please pan slowly.`;
+            speakJarvis(msg);
+            return;
+          }
+        }
+      }
+
+      // Check detected COCO objects with natural synonyms (glass, motorcycle, bed, etc.)
+      if (typeof objectDetectionEngine !== 'undefined' && objectDetectionEngine.detections.length > 0) {
+        for (const det of objectDetectionEngine.detections) {
+          const c = det.class.toLowerCase();
+          const hi = (det.nameHi || '').toLowerCase();
+          const en = (det.nameEn || '').toLowerCase();
+          let isMatch = cleanQ.includes(c) || cleanQ.includes(hi) || cleanQ.includes(en);
+
+          // Synonyms & everyday query aliases
+          if (!isMatch) {
+            if ((c === 'wine glass' || c === 'bottle' || c === 'cup') && (cleanQ.includes('glass') || cleanQ.includes('गिलास') || cleanQ.includes('ग्लास') || cleanQ.includes('cup') || cleanQ.includes('कप'))) isMatch = true;
+            if ((c === 'motorcycle' || c === 'bicycle') && (cleanQ.includes('motorcycle') || cleanQ.includes('bike') || cleanQ.includes('बाइक') || cleanQ.includes('मोटरसाइकिल') || cleanQ.includes('साइकिल'))) isMatch = true;
+            if (c === 'bed' && (cleanQ.includes('bed') || cleanQ.includes('बिस्तर') || cleanQ.includes('पलंग') || cleanQ.includes('khat'))) isMatch = true;
+            if (c === 'couch' && (cleanQ.includes('couch') || cleanQ.includes('sofa') || cleanQ.includes('सोफा') || cleanQ.includes('सोफ़ा'))) isMatch = true;
+            if (c === 'dining table' && (cleanQ.includes('table') || cleanQ.includes('मेज') || cleanQ.includes('मेज़') || cleanQ.includes('टेबल'))) isMatch = true;
+            if (c === 'person' && (cleanQ.includes('person') || cleanQ.includes('human') || cleanQ.includes('man') || cleanQ.includes('woman') || cleanQ.includes('व्यक्ति') || cleanQ.includes('इंसान') || cleanQ.includes('आदमी'))) isMatch = true;
+          }
+
+          if (isMatch) {
+            const dirPhraseEn = det.simpleDir === 'Straight ahead' ? `straight ahead towards ${det.cardinalEn}` : `on your ${det.simpleDir.toLowerCase()} towards ${det.cardinalEn}`;
+            const dirPhraseHi = det.simpleDir === 'Straight ahead' ? `सीधे सामने (${det.cardinalHi} दिशा में)` : `${det.simpleDirHi} (${det.cardinalHi} दिशा में)`;
+            const inPathEn = det.isInPath ? ' directly in your path' : '';
+            const inPathHi = det.isInPath ? ' आपके रास्ते में' : '';
+
+            const msg = jarvisState.language === 'hi'
+              ? `${det.nameHi}${inPathHi} ${dirPhraseHi} उपस्थित है, दूरी ${det.distance.toFixed(1)} मीटर।`
+              : `${det.nameEn} is detected${inPathEn} ${dirPhraseEn}, approximately ${det.distance.toFixed(1)} meters away.`;
+            speakJarvis(msg);
+            return;
+          }
+        }
+      }
+
+      // If generic find
+      announceSceneDescription();
     }
 
     /**
@@ -2300,7 +3200,7 @@
     }
 
     function triggerSceneQuery() {
-      announceWallDistance();
+      announceSceneDescription();
     }
 
     function cycleSimulatedObstacle() {
@@ -2351,7 +3251,19 @@
       const liveBadge = document.getElementById('cam-live-indicator');
       const liveText = document.getElementById('cam-live-status-text');
 
+      if (!video) return;
+
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        console.warn('getUserMedia not supported in this browser environment');
+        if (loading) {
+          loading.innerHTML = `
+            <span class="text-3xl mb-1 text-amber-400">⚠️</span>
+            <p class="text-xs font-hud text-amber-300 font-bold mb-1">CAMERA ACCESS REQUIRES HTTPS / LOCALHOST</p>
+            <p class="text-[9px] font-mono-hud text-slate-300 mb-2">Browser security restricts camera on raw file:// protocol</p>
+          `;
+          loading.style.display = 'flex';
+          loading.classList.remove('hidden');
+        }
         enableSimulatedOpticalFeed();
         return;
       }
@@ -2361,27 +3273,82 @@
           jarvisState.cameraStream.getTracks().forEach(t => t.stop());
         }
 
+        video.muted = true;
+        video.defaultMuted = true;
+        video.playsInline = true;
+        video.autoplay = true;
+        video.setAttribute('muted', '');
+        video.setAttribute('playsinline', '');
+        video.setAttribute('webkit-playsinline', '');
+        video.setAttribute('autoplay', '');
+
         let stream = null;
+        const reqFacing = jarvisState.cameraFacing || 'environment';
+
         try {
           stream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: jarvisState.cameraFacing, width: { ideal: 640 }, height: { ideal: 480 } },
+            video: { facingMode: { ideal: reqFacing }, width: { ideal: 640 }, height: { ideal: 480 } },
             audio: false
           });
-        } catch (e) {
-          stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        } catch (e1) {
+          console.warn('Ideal facingMode failed, falling back to user/generic:', e1);
+          try {
+            stream = await navigator.mediaDevices.getUserMedia({
+              video: { facingMode: 'user' },
+              audio: false
+            });
+          } catch (e2) {
+            stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+          }
         }
 
         jarvisState.cameraStream = stream;
         video.srcObject = stream;
-        await video.play();
 
-        if (loading) loading.style.display = 'none';
-        if (camSrc) camSrc.innerText = 'SOURCE: WEBCAM HD';
-        if (liveText) liveText.innerText = 'OPTICAL FEED LIVE';
+        const tryPlay = async () => {
+          try {
+            video.muted = true;
+            await video.play();
+            console.log('Video stream started successfully:', video.videoWidth, 'x', video.videoHeight);
+          } catch (pErr) {
+            console.warn('Video play deferred until user interaction:', pErr);
+          }
+        };
+
+        video.onloadedmetadata = tryPlay;
+        video.oncanplay = tryPlay;
+        tryPlay();
+
+        if (loading) {
+          loading.style.display = 'none';
+          loading.classList.add('hidden');
+        }
+
+        if (camSrc) camSrc.innerText = 'SOURCE: CAMERA HD';
+        if (liveText) liveText.innerText = 'CAMERA FEED LIVE';
         if (liveBadge) liveBadge.className = 'bg-emerald-950/80 text-emerald-300 px-1.5 py-0.5 rounded border border-emerald-400/50 flex items-center gap-1';
-        document.getElementById('camera-fps-badge').innerText = 'ACTIVE 60FPS';
+        const fpsEl = document.getElementById('camera-fps-badge');
+        if (fpsEl) fpsEl.innerText = 'ACTIVE 60FPS';
+        const facingEl = document.getElementById('cam-facing-tag');
+        if (facingEl) facingEl.innerText = `FACING: ${reqFacing.toUpperCase()}`;
+
+        if (typeof objectDetectionEngine !== 'undefined' && !objectDetectionEngine.isLoaded) {
+          objectDetectionEngine.loadModel();
+        }
       } catch (err) {
-        console.warn('Physical camera unavailable or permission denied, using neural synth vision:', err);
+        console.error('Camera stream error:', err);
+        if (loading) {
+          loading.innerHTML = `
+            <span class="text-3xl mb-1 text-red-400">⚠️</span>
+            <p class="text-xs font-hud text-red-300 font-bold mb-1">CAMERA PERMISSION NEEDED</p>
+            <p class="text-[9px] font-mono-hud text-slate-300 mb-2">Please allow camera in your browser address bar</p>
+            <button onclick="event.stopPropagation(); initCameraStream();" class="px-3.5 py-1.5 bg-cyan-600 hover:bg-cyan-500 border border-cyan-300 rounded text-xs font-hud text-white font-bold">
+              RETRY CAMERA PERMISSION
+            </button>
+          `;
+          loading.style.display = 'flex';
+          loading.classList.remove('hidden');
+        }
         enableSimulatedOpticalFeed();
       }
     }
@@ -2390,36 +3357,83 @@
       const loading = document.getElementById('cam-loading');
       const camSrc = document.getElementById('cam-hardware-source');
       const liveText = document.getElementById('cam-live-status-text');
-      if (loading) loading.style.display = 'none';
-      if (camSrc) camSrc.innerText = 'SOURCE: NEURAL SYNTH';
-      if (liveText) liveText.innerText = 'NEURAL AI VISION';
-      document.getElementById('camera-fps-badge').innerText = 'ACTIVE 60FPS';
+      if (camSrc) camSrc.innerText = 'SOURCE: STANDBY / SIM';
+      if (liveText) liveText.innerText = 'STANDBY SIMULATION';
+      const fpsEl = document.getElementById('camera-fps-badge');
+      if (fpsEl) fpsEl.innerText = 'STANDBY';
     }
 
     function toggleCamFacing() {
+      triggerHaptic('tap');
       playStarkChime('ack');
       jarvisState.cameraFacing = jarvisState.cameraFacing === 'environment' ? 'user' : 'environment';
+      const flipLabel = document.getElementById('cam-flip-label');
+      if (flipLabel) {
+        flipLabel.innerText = jarvisState.cameraFacing === 'environment' ? 'REAR CAM' : 'FRONT CAM';
+      }
       initCameraStream();
+    }
+
+    let lastCamContainerTapTime = 0;
+    function handleCameraContainerClick() {
+      triggerHaptic('tap');
+      const now = Date.now();
+      if (now - lastCamContainerTapTime < 380) {
+        // Double-tap on mobile flips between rear & front camera
+        toggleCamFacing();
+        lastCamContainerTapTime = 0;
+        return;
+      }
+      lastCamContainerTapTime = now;
+      const video = document.getElementById('device-camera-video');
+      if (!jarvisState.cameraStream) {
+        initCameraStream();
+      } else if (video && video.paused) {
+        video.muted = true;
+        video.play().catch(e => console.warn('Camera play error:', e));
+      }
+    }
+
+    function ensureVideoPlaying() {
+      const video = document.getElementById('device-camera-video');
+      if (video && video.srcObject && video.paused) {
+        video.muted = true;
+        video.play().catch(() => {});
+      }
     }
 
     function renderOpticalVisionCanvas() {
       if (!camCanvas || !camCtx) return;
-      if (camCanvas.width === 0 || camCanvas.height === 0) {
+      if (camCanvas.width === 0 || camCanvas.height === 0 || camCanvas.width !== camCanvas.clientWidth) {
         camCanvas.width = camCanvas.clientWidth || 320;
-        camCanvas.height = camCanvas.clientHeight || 176;
+        camCanvas.height = camCanvas.clientHeight || 192;
       }
       const w = camCanvas.width;
       const h = camCanvas.height;
 
       const video = document.getElementById('device-camera-video');
-      const isVideoPlaying = jarvisState.cameraStream && video && !video.paused && video.readyState >= 2;
+      const hasStream = !!(jarvisState.cameraStream && video && video.srcObject);
 
-      if (isVideoPlaying) {
-        camCtx.drawImage(video, 0, 0, w, h);
-        camCtx.fillStyle = 'rgba(0, 240, 255, 0.04)';
-        camCtx.fillRect(0, 0, w, h);
+      if (hasStream) {
+        // Active camera stream: automatically resume play if paused
+        if (video.paused) {
+          video.muted = true;
+          video.play().catch(() => {});
+        }
+
+        // Keep canvas transparent so hardware-accelerated video underneath displays cleanly
+        camCtx.clearRect(0, 0, w, h);
+
+        // Also draw current video frame onto canvas when ready for pixel-perfect HUD alignment
+        if (video.videoWidth > 0 && !video.paused) {
+          try {
+            camCtx.drawImage(video, 0, 0, w, h);
+          } catch (drawErr) {}
+          camCtx.fillStyle = 'rgba(0, 240, 255, 0.02)';
+          camCtx.fillRect(0, 0, w, h);
+        }
       } else {
-        // Perspective Cyber Corridor
+        // Perspective Cyber Corridor ONLY when there is TRULY NO active camera stream
         camCtx.fillStyle = '#020713';
         camCtx.fillRect(0, 0, w, h);
 
@@ -2506,34 +3520,139 @@
       camCtx.fillText(`R: ${visionDepthEngine.distRight.toFixed(1)}m`, w - 48, h - 6);
 
       // Center Steering Direction Compass Pill
-      camCtx.fillStyle = d <= 0.55 ? 'rgba(239, 68, 68, 0.9)' : (steer === 'FORWARD' ? 'rgba(16, 185, 129, 0.85)' : 'rgba(245, 158, 11, 0.85)');
-      camCtx.fillRect(w * 0.28, 4, w * 0.44, 16);
+      camCtx.fillStyle = visionDepthEngine.isLensOccluded 
+        ? 'rgba(217, 119, 6, 0.95)' 
+        : (d <= 0.55 ? 'rgba(239, 68, 68, 0.9)' : (steer === 'FORWARD' ? 'rgba(16, 185, 129, 0.85)' : 'rgba(245, 158, 11, 0.85)'));
+      camCtx.fillRect(w * 0.16, 4, w * 0.68, 16);
       camCtx.fillStyle = '#020612';
       camCtx.font = 'bold 9px monospace';
-      const steerPillText = steer === 'STOP' ? '🛑 STOP (0.5M)' : (steer === 'RIGHT' ? '➔ VEER RIGHT' : (steer === 'LEFT' ? '⬅ VEER LEFT' : '↑ STRAIGHT'));
-      camCtx.fillText(steerPillText, w * 0.31, 15);
+      const facingCard = compassEngine.getRelativeCardinal(0).en.toUpperCase();
+      const rightCard = compassEngine.getRelativeCardinal(90).en.toUpperCase();
+      const leftCard = compassEngine.getRelativeCardinal(-90).en.toUpperCase();
+      const steerPillText = visionDepthEngine.isLensOccluded 
+        ? '⚠️ UNCOVER CAMERA LENS' 
+        : (steer === 'STOP' ? '🛑 STOP: WALL 0.5M' : (steer === 'RIGHT' ? `➔ TURN RIGHT [${rightCard}]` : (steer === 'LEFT' ? `⬅ TURN LEFT [${leftCard}]` : `↑ STRAIGHT [${facingCard}]`)));
+      camCtx.fillText(steerPillText, w * 0.18, 15);
 
-      // Center Obstacle Bounding Box
-      camCtx.strokeStyle = boxColor;
-      camCtx.lineWidth = 1.8;
-      camCtx.strokeRect(rx, ry, rw, rh);
+      // Full-Frame Occlusion Warning Banner
+      if (visionDepthEngine.isLensOccluded) {
+        camCtx.fillStyle = 'rgba(120, 53, 15, 0.88)';
+        camCtx.fillRect(10, 24, w - 20, h - 46);
+        camCtx.strokeStyle = '#f59e0b';
+        camCtx.lineWidth = 2;
+        camCtx.strokeRect(10, 24, w - 20, h - 46);
 
-      // Corner brackets
-      camCtx.lineWidth = 2.5;
-      camCtx.beginPath();
-      camCtx.moveTo(rx, ry + 8); camCtx.lineTo(rx, ry); camCtx.lineTo(rx + 8, ry);
-      camCtx.moveTo(rx + rw - 8, ry); camCtx.lineTo(rx + rw, ry); camCtx.lineTo(rx + rw, ry + 8);
-      camCtx.moveTo(rx, ry + rh - 8); camCtx.lineTo(rx, ry + rh); camCtx.lineTo(rx + 8, ry + rh);
-      camCtx.moveTo(rx + rw - 8, ry + rh); camCtx.lineTo(rx + rw, ry + rh); camCtx.lineTo(rx + rw, ry + rh - 8);
-      camCtx.stroke();
+        camCtx.fillStyle = '#ffffff';
+        camCtx.font = 'bold 10px monospace';
+        camCtx.fillText('⚠️ CAMERA LENS OCCLUDED (HAND ON LENS)', 16, h/2 - 6);
+        camCtx.fillStyle = '#fde68a';
+        camCtx.font = '8.5px monospace';
+        camCtx.fillText('PLEASE UNCOVER CAMERA TO SCAN PATH', 18, h/2 + 10);
+      } else {
+        // Center Obstacle Bounding Box (Natural Wall / Corridor Horizon)
+        camCtx.strokeStyle = boxColor;
+        camCtx.lineWidth = 1.8;
+        camCtx.strokeRect(rx, ry, rw, rh);
 
-      // Entity Tag with Live Measured Distance
-      camCtx.fillStyle = 'rgba(2, 6, 18, 0.85)';
-      camCtx.fillRect(rx, ry - 14, rw, 14);
-      camCtx.fillStyle = boxColor;
-      camCtx.font = 'bold 9px monospace';
-      const labelText = d <= 0.55 ? `DANGER STOP [${d.toFixed(1)}m]` : (d < 1.4 ? `OBSTACLE [${d.toFixed(1)}m]` : `CORRIDOR [${d.toFixed(1)}m]`);
-      camCtx.fillText(labelText, rx + 4, ry - 3);
+        // Corner brackets
+        camCtx.lineWidth = 2.5;
+        camCtx.beginPath();
+        camCtx.moveTo(rx, ry + 8); camCtx.lineTo(rx, ry); camCtx.lineTo(rx + 8, ry);
+        camCtx.moveTo(rx + rw - 8, ry); camCtx.lineTo(rx + rw, ry); camCtx.lineTo(rx + rw, ry + 8);
+        camCtx.moveTo(rx, ry + rh - 8); camCtx.lineTo(rx, ry + rh); camCtx.lineTo(rx + 8, ry + rh);
+        camCtx.moveTo(rx + rw - 8, ry + rh); camCtx.lineTo(rx + rw, ry + rh); camCtx.lineTo(rx + rw, ry + rh - 8);
+        camCtx.stroke();
+
+        // Entity Tag with Live Measured Distance
+        camCtx.fillStyle = 'rgba(2, 6, 18, 0.85)';
+        camCtx.fillRect(rx, ry - 14, rw, 14);
+        camCtx.fillStyle = boxColor;
+        camCtx.font = 'bold 9px monospace';
+        const labelText = d <= 0.55 ? `DANGER STOP [${d.toFixed(1)}m]` : (d < 1.4 ? `NATURAL WALL [${d.toFixed(1)}m]` : `CORRIDOR [${d.toFixed(1)}m]`);
+        camCtx.fillText(labelText, rx + 4, ry - 3);
+      }
+
+      // Render Detected COCO-SSD Neural Bounding Boxes & Human Pedestrians
+      if (typeof objectDetectionEngine !== 'undefined' && objectDetectionEngine.detections.length > 0 && !visionDepthEngine.isLensOccluded) {
+        for (const det of objectDetectionEngine.detections) {
+          const bx = Math.max(2, Math.min(w - 20, det.normBbox.x * w));
+          const by = Math.max(14, Math.min(h - 20, det.normBbox.y * h));
+          const bw = Math.max(20, Math.min(w - bx - 2, det.normBbox.w * w));
+          const bh = Math.max(20, Math.min(h - by - 2, det.normBbox.h * h));
+
+          if (det.isHuman) {
+            // Specialized Emerald Pedestrian Tracking Silhouette Box
+            camCtx.strokeStyle = '#10b981';
+            camCtx.lineWidth = 2.0;
+            camCtx.strokeRect(bx, by, bw, bh);
+
+            // Head circle indicator
+            camCtx.beginPath();
+            camCtx.arc(bx + bw / 2, by + Math.min(12, bh * 0.16), Math.min(7, bw * 0.18), 0, Math.PI * 2);
+            camCtx.stroke();
+
+            // Feet ground contact line
+            camCtx.beginPath();
+            camCtx.moveTo(bx, by + bh);
+            camCtx.lineTo(bx + bw, by + bh);
+            camCtx.stroke();
+
+            // Top label tag: 👤 PERSON [DIR] [CARDINAL] [DIST]m
+            const tagW = Math.max(124, bw);
+            camCtx.fillStyle = 'rgba(6, 78, 59, 0.95)';
+            camCtx.fillRect(bx, Math.max(0, by - 14), tagW, 14);
+            camCtx.fillStyle = '#6ee7b7';
+            camCtx.font = 'bold 8px monospace';
+            const personDirStr = det.simpleDir === 'Straight ahead' ? 'AHEAD' : det.simpleDir.toUpperCase();
+            camCtx.fillText(`👤 PERSON ${personDirStr} [${det.cardinalEn}] ${det.distance.toFixed(1)}m`, bx + 3, Math.max(10, by - 3));
+          } else {
+            // Objects (Glass, Motorcycle, Bed, etc.)
+            let detColor = det.distance <= 1.0 ? '#ef4444' : (det.distance < 2.0 ? '#f59e0b' : '#00f0ff');
+            if (det.isInPath) detColor = '#f97316'; // Vivid warning orange for objects in the path
+
+            camCtx.strokeStyle = detColor;
+            camCtx.lineWidth = det.isInPath ? 2.2 : 1.5;
+            camCtx.strokeRect(bx, by, bw, bh);
+
+            // Icon by category
+            const objIcon = det.isGlassOrCup ? '🥛 ' : (det.isVehicle ? '🏍️ ' : (det.isFurniture ? '🛏️ ' : '📦 '));
+            const pathTag = det.isInPath ? 'IN PATH' : (det.simpleDir === 'Straight ahead' ? 'AHEAD' : det.simpleDir.toUpperCase());
+
+            // Top label tag
+            const tagW = Math.max(130, bw);
+            camCtx.fillStyle = det.isInPath ? 'rgba(67, 20, 7, 0.95)' : 'rgba(2, 6, 18, 0.9)';
+            camCtx.fillRect(bx, Math.max(0, by - 13), tagW, 13);
+            camCtx.fillStyle = det.isInPath ? '#fdba74' : detColor;
+            camCtx.font = 'bold 8px monospace';
+            camCtx.fillText(`${objIcon}${det.nameEn} ${pathTag} [${det.distance.toFixed(1)}m]`, bx + 3, Math.max(10, by - 3));
+          }
+        }
+      }
+
+      // Render Teachable Vision Personal Object Match (Pulsating Magenta/Purple)
+      if (typeof teachableVisionEngine !== 'undefined' && teachableVisionEngine.targetMatch) {
+        const tm = teachableVisionEngine.targetMatch;
+        const tw = w * 0.42;
+        const th = h * 0.45;
+        const tx = (w - tw) / 2;
+        const ty = (h - th) / 2;
+
+        camCtx.strokeStyle = '#c084fc';
+        camCtx.lineWidth = 2.2;
+        camCtx.strokeRect(tx, ty, tw, th);
+
+        // Pulsating crosshair
+        camCtx.beginPath();
+        camCtx.moveTo(tx + tw/2 - 8, ty + th/2); camCtx.lineTo(tx + tw/2 + 8, ty + th/2);
+        camCtx.moveTo(tx + tw/2, ty + th/2 - 8); camCtx.lineTo(tx + tw/2, ty + th/2 + 8);
+        camCtx.stroke();
+
+        camCtx.fillStyle = 'rgba(88, 28, 135, 0.95)';
+        camCtx.fillRect(tx, ty - 16, tw, 16);
+        camCtx.fillStyle = '#ffffff';
+        camCtx.font = 'bold 8.5px monospace';
+        camCtx.fillText(`★ ${tm.item.nameEn.toUpperCase()} (${Math.round(tm.similarity * 100)}%)`, tx + 4, ty - 4);
+      }
 
       requestAnimationFrame(renderOpticalVisionCanvas);
     }
@@ -2605,6 +3724,623 @@
     }
 
     /* -------------------------------------------------------------
+       7.5. EDGE AI NEURAL ENGINES: COCO-SSD & TEACHABLE VISION ("दृष्टि सीखो")
+       ------------------------------------------------------------- */
+    
+    // Comprehensive English to Hindi translation for all 80 COCO-SSD classes
+    const COCO_HINDI_MAP = {
+      'person': 'व्यक्ति / इंसान', 'bicycle': 'साइकिल', 'car': 'कार / गाड़ी', 'motorcycle': 'मोटरसाइकिल',
+      'airplane': 'हवाई जहाज', 'bus': 'बस', 'train': 'ट्रेन', 'truck': 'ट्रक', 'boat': 'नाव',
+      'traffic light': 'ट्रैफिक लाइट', 'fire hydrant': 'फायर हाइड्रेंट', 'stop sign': 'स्टॉप साइन',
+      'parking meter': 'पार्किंग मीटर', 'bench': 'बेंच', 'bird': 'पक्षी', 'cat': 'बिल्ली',
+      'dog': 'कुत्ता', 'horse': 'घोड़ा', 'sheep': 'भेड़', 'cow': 'गाय', 'elephant': 'हाथी',
+      'bear': 'भालू', 'zebra': 'ज़ेबरा', 'giraffe': 'जिराफ़', 'backpack': 'बैग / बैकपैक',
+      'umbrella': 'छाता', 'handbag': 'हैंडबैग', 'tie': 'टाई', 'suitcase': 'सूटकेस',
+      'frisbee': 'फ्रिसबी', 'skis': 'स्की', 'snowboard': 'स्नोबोर्ड', 'sports ball': 'गेंद',
+      'kite': 'पतंग', 'baseball bat': 'बल्ला', 'baseball glove': 'दस्ताना', 'skateboard': 'स्केटबोर्ड',
+      'surfboard': 'सर्फ़बोर्ड', 'tennis racket': 'रैकेट', 'bottle': 'बोतल', 'wine glass': 'ग्लास',
+      'cup': 'कप', 'fork': 'कांटा', 'knife': 'चाकू', 'spoon': 'चम्मच', 'bowl': 'कटोरा',
+      'banana': 'केला', 'apple': 'सेब', 'sandwich': 'सैंडविच', 'orange': 'संतरा',
+      'broccoli': 'ब्रोकोली', 'carrot': 'गाजर', 'hot dog': 'हॉट डॉग', 'pizza': 'पिज़्ज़ा',
+      'donut': 'डोनट', 'cake': 'केक', 'chair': 'कुर्सी', 'couch': 'सोफ़ा',
+      'potted plant': 'पौधा', 'bed': 'बिस्तर', 'dining table': 'मेज़ / टेबल', 'toilet': 'शौचालय',
+      'tv': 'टीवी / स्क्रीन', 'laptop': 'लैपटॉप', 'mouse': 'माउस', 'remote': 'रिमोट',
+      'keyboard': 'कीबोर्ड', 'cell phone': 'मोबाइल फ़ोन', 'microwave': 'माइक्रोवेव',
+      'oven': 'ओवन', 'toaster': 'टोस्टर', 'sink': 'सिंक', 'refrigerator': 'फ्रिज',
+      'book': 'किताब', 'clock': 'घड़ी', 'vase': 'फूलदान', 'scissors': 'कैंची',
+      'teddy bear': 'टेडी बियर', 'hair drier': 'हेयर ड्रायर', 'toothbrush': 'टूथब्रश'
+    };
+
+    const objectDetectionEngine = {
+      model: null,
+      isLoading: false,
+      isLoaded: false,
+      isDetecting: false,
+      lastInferenceTime: 0,
+      minConfidence: 0.45,
+      detections: [], // Array of { class, score, bbox, normBbox, sector, sectorHi, distance, nameHi, nameEn }
+      
+      async loadModel() {
+        if (this.isLoading || this.isLoaded) return;
+        this.isLoading = true;
+        const statusEl = document.getElementById('ai-model-status');
+        const dotEl = document.getElementById('ai-model-dot');
+        if (statusEl) statusEl.innerText = 'AI: LOADING COCO-SSD...';
+
+        try {
+          if (window.cocoSsd) {
+            this.model = await window.cocoSsd.load({ base: 'lite_mobilenet_v2' });
+            this.isLoaded = true;
+            this.isLoading = false;
+            console.log('Edge AI: COCO-SSD loaded successfully.');
+            if (statusEl) statusEl.innerText = 'AI: COCO-SSD ONLINE (80 CLASSES)';
+            if (dotEl) {
+              dotEl.classList.remove('bg-purple-400');
+              dotEl.classList.add('bg-cyan-400');
+            }
+            playStarkChime('ack');
+          } else {
+            console.warn('cocoSsd library not yet available in window');
+            this.isLoading = false;
+          }
+        } catch (err) {
+          console.warn('Failed to load COCO-SSD:', err);
+          this.isLoading = false;
+          if (statusEl) statusEl.innerText = 'AI: OFFLINE HEURISTIC';
+        }
+      },
+
+      async detectFrame(video) {
+        if (!this.model || this.isDetecting || !video || video.readyState < 2) return;
+        const now = Date.now();
+        if (now - this.lastInferenceTime < 240) return; // 4 FPS throttle to keep HUD super smooth
+        this.lastInferenceTime = now;
+        this.isDetecting = true;
+
+        try {
+          const predictions = await this.model.detect(video);
+          const vw = video.videoWidth || 640;
+          const vh = video.videoHeight || 480;
+          const results = [];
+
+          for (const pred of predictions) {
+            if (pred.score < this.minConfidence) continue;
+            const [bx, by, bw, bh] = pred.bbox;
+
+            // Compute normalized coords
+            const nx = bx / vw;
+            const ny = by / vh;
+            const nw = bw / vw;
+            const nh = bh / vh;
+
+            const cx = nx + (nw / 2);
+            const bottomY = ny + nh;
+
+            // Simple Everyday Direction: Left, Right, Ahead & Compass Heading
+            const simple = getSimpleDirection(cx);
+            const cls = pred.class.toLowerCase();
+            const isHuman = cls === 'person';
+            const isGlassOrCup = ['wine glass', 'cup', 'bottle', 'bowl', 'vase'].includes(cls);
+            const isVehicle = ['motorcycle', 'bicycle', 'car', 'bus', 'truck'].includes(cls);
+            const isFurniture = ['bed', 'couch', 'chair', 'dining table', 'bench'].includes(cls);
+
+            // Friendly Display & Voice Names
+            let friendlyNameEn = pred.class.toUpperCase();
+            let friendlyNameHi = COCO_HINDI_MAP[cls] || pred.class;
+
+            if (cls === 'wine glass') {
+              friendlyNameEn = 'GLASS';
+              friendlyNameHi = 'कांच का गिलास';
+            } else if (cls === 'bed') {
+              friendlyNameEn = 'BED';
+              friendlyNameHi = 'बिस्तर';
+            } else if (cls === 'motorcycle') {
+              friendlyNameEn = 'MOTORCYCLE';
+              friendlyNameHi = 'मोटरसाइकिल';
+            } else if (cls === 'bicycle') {
+              friendlyNameEn = 'BICYCLE';
+              friendlyNameHi = 'साइकिल';
+            } else if (cls === 'couch') {
+              friendlyNameEn = 'SOFA';
+              friendlyNameHi = 'सोफ़ा';
+            } else if (cls === 'dining table') {
+              friendlyNameEn = 'TABLE';
+              friendlyNameHi = 'मेज़';
+            }
+
+            // Path Corridor Intersection (Central Walking Path: 28% to 72% screen width)
+            const pathLeft = 0.28;
+            const pathRight = 0.72;
+            const objRight = nx + nw;
+            const isInPath = ((nx < pathRight && objRight > pathLeft) || simple.code === 'FORWARD');
+
+            // High-Precision Metric Distance Calculation (Ground Perspective + Optical Pinhole)
+            let dGround = 3.6;
+            if (bottomY >= 0.90) {
+              dGround = 0.40 + (1.0 - bottomY) * 3.0;
+            } else if (bottomY >= 0.65) {
+              dGround = 0.80 + ((0.90 - bottomY) / 0.25) * 1.5;
+            } else {
+              dGround = 2.30 + ((0.65 - Math.max(0.3, bottomY)) / 0.35) * 1.8;
+            }
+
+            let dist = 3.6;
+            if (isHuman) {
+              const dOptical = (0.88 * 1.70) / Math.max(0.08, nh);
+              dist = (bottomY >= 0.75) ? (dGround * 0.65 + dOptical * 0.35) : (dOptical * 0.75 + dGround * 0.25);
+            } else if (isVehicle) {
+              const realH = (cls === 'car' || cls === 'truck' || cls === 'bus') ? 1.50 : 1.10;
+              const dOptical = (0.88 * realH) / Math.max(0.08, nh);
+              dist = (bottomY >= 0.70) ? (dGround * 0.60 + dOptical * 0.40) : (dOptical * 0.70 + dGround * 0.30);
+            } else if (isFurniture) {
+              const realH = (cls === 'bed') ? 0.75 : 0.85;
+              const dOptical = (0.88 * realH) / Math.max(0.08, nh);
+              dist = (bottomY >= 0.65) ? (dGround * 0.65 + dOptical * 0.35) : (dOptical * 0.65 + dGround * 0.35);
+            } else if (isGlassOrCup) {
+              const dOptical = (0.88 * 0.20) / Math.max(0.04, nh);
+              dist = (bottomY >= 0.75) ? (dGround * 0.75 + dOptical * 0.25) : (dOptical * 0.55 + dGround * 0.45);
+            } else {
+              dist = dGround;
+            }
+            dist = Math.max(0.35, Math.min(5.0, dist));
+
+            results.push({
+              class: pred.class,
+              nameEn: friendlyNameEn,
+              nameHi: friendlyNameHi,
+              friendlyNameEn,
+              friendlyNameHi,
+              score: pred.score,
+              bbox: [bx, by, bw, bh],
+              normBbox: { x: nx, y: ny, w: nw, h: nh },
+              sector: simple.code,
+              sectorHi: simple.dirHi,
+              simpleDir: simple.dirEn,
+              simpleDirHi: simple.dirHi,
+              cardinalEn: simple.cardinalEn,
+              cardinalHi: simple.cardinalHi,
+              clockHour: simple.code === 'LEFT' ? 10 : (simple.code === 'RIGHT' ? 2 : 12),
+              clockEn: simple.dirEn,
+              clockHi: simple.dirHi,
+              distance: dist,
+              isHuman,
+              isGlassOrCup,
+              isVehicle,
+              isFurniture,
+              isInPath
+            });
+          }
+
+          // Sort by nearest distance first
+          results.sort((a, b) => a.distance - b.distance);
+          this.detections = results;
+
+          // If detections found and no custom item currently overriding HUD
+          if (results.length > 0 && (!teachableVisionEngine || !teachableVisionEngine.targetMatch)) {
+            const top = results[0];
+            const objNameEn = document.getElementById('obj-name-en');
+            const objNameHi = document.getElementById('obj-name-hi');
+            const objConf = document.getElementById('obj-confidence');
+
+            const pathBadge = top.isInPath ? ' [IN PATH]' : '';
+            const pathBadgeHi = top.isInPath ? ' [रास्ते में]' : '';
+            if (objNameEn) objNameEn.innerText = `${top.isHuman ? '👤 ' : ''}${top.nameEn}${pathBadge} (${top.distance.toFixed(1)}m, ${top.simpleDir.toUpperCase()})`;
+            if (objNameHi) objNameHi.innerText = `${top.isHuman ? '👤 ' : ''}${top.nameHi}${pathBadgeHi} (${top.distance.toFixed(1)}m, ${top.simpleDirHi})`;
+            if (objConf) objConf.innerText = `${Math.round(top.score * 100)}% MATCH (${top.isHuman ? 'HUMAN RADAR' : (top.isInPath ? 'PATH OBSTACLE' : 'COCO')})`;
+          }
+        } catch (err) {
+          // ignore transient video read errors
+        } finally {
+          this.isDetecting = false;
+        }
+      },
+
+      getClosestHumanInPath() {
+        const humans = this.detections.filter(d => d.isHuman);
+        if (humans.length === 0) return null;
+        // Walking corridor: Straight ahead or close proximity <= 2.2m
+        const inCorridor = humans.filter(h => h.isInPath || h.distance <= 2.2);
+        if (inCorridor.length > 0) return inCorridor[0];
+        return humans[0];
+      },
+
+      getClosestObstacleInPath() {
+        if (!this.detections || this.detections.length === 0) return null;
+        // Corridor obstacles within 2.6m
+        const inCorridor = this.detections.filter(d => d.isInPath && d.distance <= 2.6);
+        if (inCorridor.length > 0) {
+          inCorridor.sort((a, b) => a.distance - b.distance);
+          return inCorridor[0];
+        }
+        // Critical proximity <= 1.2m anywhere
+        const criticalClose = this.detections.filter(d => d.distance <= 1.2);
+        if (criticalClose.length > 0) {
+          criticalClose.sort((a, b) => a.distance - b.distance);
+          return criticalClose[0];
+        }
+        return null;
+      }
+    };
+
+    const teachableVisionEngine = {
+      isModalOpen: false,
+      isTraining: false,
+      customItems: [],
+      targetMatch: null, // { item, similarity, distance }
+      lastSpokenItemId: null,
+      lastSpokenTime: 0,
+      sampleCanvas: null,
+      sampleCtx: null,
+
+      init() {
+        this.sampleCanvas = document.createElement('canvas');
+        this.sampleCanvas.width = 80;
+        this.sampleCanvas.height = 80;
+        this.sampleCtx = this.sampleCanvas.getContext('2d');
+        this.loadSavedItems();
+      },
+
+      loadSavedItems() {
+        try {
+          const raw = localStorage.getItem('drishti_custom_items');
+          this.customItems = raw ? JSON.parse(raw) : [];
+        } catch (e) {
+          this.customItems = [];
+        }
+        this.renderSavedItemsUI();
+      },
+
+      saveItems() {
+        try {
+          localStorage.setItem('drishti_custom_items', JSON.stringify(this.customItems));
+        } catch (e) {
+          console.warn('Storage quota error:', e);
+        }
+        this.renderSavedItemsUI();
+      },
+
+      renderSavedItemsUI() {
+        const badge = document.getElementById('trained-items-badge');
+        const list = document.getElementById('trained-items-list');
+        if (badge) badge.innerText = `${this.customItems.length} SAVED`;
+        if (!list) return;
+
+        if (this.customItems.length === 0) {
+          list.innerHTML = `<div class="text-slate-500 italic text-center py-2">No personal items trained yet. Try training your medicine bottle or keys!</div>`;
+          return;
+        }
+
+        let html = '';
+        for (const item of this.customItems) {
+          html += `
+            <div class="flex items-center justify-between p-2 rounded-lg bg-black/60 border border-purple-500/30 hover:border-purple-400/60 transition">
+              <div class="flex items-center gap-2">
+                <span class="w-2 h-2 rounded-full bg-purple-400"></span>
+                <div>
+                  <span class="font-bold text-white">${item.nameEn}</span>
+                  <span class="text-purple-300 text-[10px] ml-1.5 font-sans">${item.nameHi}</span>
+                </div>
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="text-[9px] text-slate-400">${item.date || 'Trained'}</span>
+                <button onclick="teachableVisionEngine.deleteItem('${item.id}')" class="px-2 py-0.5 rounded bg-red-950/70 hover:bg-red-800 text-red-300 text-[10px] border border-red-500/40">
+                  DELETE
+                </button>
+              </div>
+            </div>
+          `;
+        }
+        list.innerHTML = html;
+      },
+
+      deleteItem(id) {
+        this.customItems = this.customItems.filter(it => it.id !== id);
+        this.saveItems();
+        playStarkChime('ack');
+        const msg = jarvisState.language === 'hi' ? "वस्तु मॉडल से हटा दी गई है।" : "Item deleted from trained model.";
+        speakJarvis(msg);
+      },
+
+      // 80-Dimensional HSV + Spatial Gradient Feature Extractor
+      extractFeaturesFromCrop(sourceVideoOrCanvas, sx, sy, sw, sh) {
+        if (!this.sampleCtx) this.init();
+        this.sampleCtx.drawImage(sourceVideoOrCanvas, sx, sy, sw, sh, 0, 0, 80, 80);
+        const img = this.sampleCtx.getImageData(0, 0, 80, 80);
+        const d = img.data;
+
+        // 4x4 spatial grid = 16 blocks (each 20x20 pixels)
+        // 5 features per block: Hue, Saturation, Value, GradX, GradY = 80 features
+        const features = new Float32Array(80);
+        let fIdx = 0;
+
+        for (let gy = 0; gy < 4; gy++) {
+          for (let gx = 0; gx < 4; gx++) {
+            let sumH = 0, sumS = 0, sumV = 0, sumGx = 0, sumGy = 0;
+            const startX = gx * 20;
+            const startY = gy * 20;
+
+            for (let py = startY; py < startY + 20; py += 2) {
+              for (let px = startX; px < startX + 20; px += 2) {
+                const idx = (py * 80 + px) * 4;
+                const r = d[idx] / 255;
+                const g = d[idx+1] / 255;
+                const b = d[idx+2] / 255;
+
+                // RGB to HSV
+                const max = Math.max(r, g, b);
+                const min = Math.min(r, g, b);
+                const delta = max - min;
+                let h = 0;
+                if (delta > 0.001) {
+                  if (max === r) h = ((g - b) / delta) % 6;
+                  else if (max === g) h = (b - r) / delta + 2;
+                  else h = (r - g) / delta + 4;
+                  h = (h / 6);
+                  if (h < 0) h += 1;
+                }
+                const s = max === 0 ? 0 : delta / max;
+                const v = max;
+
+                sumH += h;
+                sumS += s;
+                sumV += v;
+
+                // Spatial gradient
+                if (px < 78 && py < 78) {
+                  const idxRight = (py * 80 + (px + 2)) * 4;
+                  const idxDown = ((py + 2) * 80 + px) * 4;
+                  const lum = (r * 0.3 + g * 0.59 + b * 0.11);
+                  const lumR = (d[idxRight] * 0.3 + d[idxRight+1] * 0.59 + d[idxRight+2] * 0.11) / 255;
+                  const lumD = (d[idxDown] * 0.3 + d[idxDown+1] * 0.59 + d[idxDown+2] * 0.11) / 255;
+                  sumGx += Math.abs(lumR - lum);
+                  sumGy += Math.abs(lumD - lum);
+                }
+              }
+            }
+
+            const count = 100; // 10x10 sampled pixels
+            features[fIdx++] = sumH / count;
+            features[fIdx++] = sumS / count;
+            features[fIdx++] = sumV / count;
+            features[fIdx++] = sumGx / count;
+            features[fIdx++] = sumGy / count;
+          }
+        }
+
+        // L2 normalize feature vector to unit length
+        let normSq = 0;
+        for (let i = 0; i < 80; i++) normSq += features[i] * features[i];
+        const norm = Math.sqrt(normSq) || 1;
+        for (let i = 0; i < 80; i++) features[i] /= norm;
+
+        return features;
+      },
+
+      cosineSimilarity(vecA, vecB) {
+        let dot = 0;
+        for (let i = 0; i < 80; i++) dot += vecA[i] * vecB[i];
+        return dot;
+      },
+
+      checkLiveMatch(video) {
+        if (this.customItems.length === 0 || !video || video.readyState < 2) {
+          this.targetMatch = null;
+          return;
+        }
+
+        const vw = video.videoWidth || 640;
+        const vh = video.videoHeight || 480;
+        const cropSize = Math.min(vw, vh) * 0.45;
+        const sx = (vw - cropSize) / 2;
+        const sy = (vh - cropSize) / 2;
+
+        const liveVec = this.extractFeaturesFromCrop(video, sx, sy, cropSize, cropSize);
+
+        let bestItem = null;
+        let bestScore = 0;
+
+        for (const item of this.customItems) {
+          const score = this.cosineSimilarity(liveVec, item.centroid);
+          if (score > bestScore) {
+            bestScore = score;
+            bestItem = item;
+          }
+        }
+
+        // Recognition Threshold: 0.87
+        if (bestScore >= 0.87 && bestItem) {
+          this.targetMatch = {
+            item: bestItem,
+            similarity: bestScore,
+            distance: visionDepthEngine.distCenter
+          };
+
+          // Update HUD active obstacle card
+          const objNameEn = document.getElementById('obj-name-en');
+          const objNameHi = document.getElementById('obj-name-hi');
+          const objConf = document.getElementById('obj-confidence');
+
+          if (objNameEn) objNameEn.innerText = `★ ${bestItem.nameEn} (${visionDepthEngine.distCenter.toFixed(1)}m)`;
+          if (objNameHi) objNameHi.innerText = `★ ${bestItem.nameHi} (${visionDepthEngine.distCenter.toFixed(1)}m)`;
+          if (objConf) objConf.innerText = `${Math.round(bestScore * 100)}% MATCH (PERSONAL)`;
+
+          // Voice Announcement with 5 second cooldown
+          const now = Date.now();
+          if (now - this.lastSpokenTime > 5000 || this.lastSpokenItemId !== bestItem.id) {
+            this.lastSpokenTime = now;
+            this.lastSpokenItemId = bestItem.id;
+            playStarkChime('ack');
+            const alertMsg = jarvisState.language === 'hi'
+              ? `आपकी सीखी गई वस्तु: ${bestItem.nameHi} सामने है, दूरी ${visionDepthEngine.distCenter.toFixed(1)} मीटर।`
+              : `Personal item recognized: ${bestItem.nameEn} directly ahead, ${visionDepthEngine.distCenter.toFixed(1)} meters.`;
+            speakJarvis(alertMsg);
+          }
+        } else {
+          this.targetMatch = null;
+        }
+      },
+
+      renderTeachableViewfinder() {
+        const canvas = document.getElementById('train-viewfinder-canvas');
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        const video = document.getElementById('device-camera-video');
+        const isVideoPlaying = jarvisState.cameraStream && video && !video.paused && video.readyState >= 2;
+
+        const drawLoop = () => {
+          if (!teachableVisionEngine.isModalOpen) return;
+          const w = canvas.width = canvas.clientWidth || 320;
+          const h = canvas.height = canvas.clientHeight || 180;
+
+          if (isVideoPlaying) {
+            ctx.drawImage(video, 0, 0, w, h);
+            ctx.fillStyle = 'rgba(168, 85, 247, 0.08)';
+            ctx.fillRect(0, 0, w, h);
+          } else {
+            ctx.fillStyle = '#05030a';
+            ctx.fillRect(0, 0, w, h);
+            ctx.fillStyle = '#c084fc';
+            ctx.font = '10px monospace';
+            ctx.fillText('CAMERA STANDBY - CLICK CAMERA TO ACTIVATE', 20, h / 2);
+          }
+
+          requestAnimationFrame(drawLoop);
+        };
+        requestAnimationFrame(drawLoop);
+      }
+    };
+
+    function openTeachableModal() {
+      teachableVisionEngine.isModalOpen = true;
+      const modal = document.getElementById('teachable-vision-modal');
+      if (modal) modal.classList.remove('hidden');
+      teachableVisionEngine.renderTeachableViewfinder();
+      teachableVisionEngine.renderSavedItemsUI();
+    }
+
+    function closeTeachableModal() {
+      teachableVisionEngine.isModalOpen = false;
+      const modal = document.getElementById('teachable-vision-modal');
+      if (modal) modal.classList.add('hidden');
+    }
+
+    function startItemTraining() {
+      const nameEnInput = document.getElementById('train-item-name-en');
+      const nameHiInput = document.getElementById('train-item-name-hi');
+      const nameEn = (nameEnInput ? nameEnInput.value.trim() : '') || 'Personal Item';
+      const nameHi = (nameHiInput ? nameHiInput.value.trim() : '') || 'मेरी वस्तु';
+
+      const video = document.getElementById('device-camera-video');
+      const isVideoPlaying = jarvisState.cameraStream && video && !video.paused && video.readyState >= 2;
+
+      if (!isVideoPlaying) {
+        const warnMsg = jarvisState.language === 'hi' 
+          ? "कृपया पहले कैमरा शुरू करें।" 
+          : "Please start the camera first to train an item.";
+        speakJarvis(warnMsg);
+        return;
+      }
+
+      if (teachableVisionEngine.isTraining) return;
+      teachableVisionEngine.isTraining = true;
+
+      const btn = document.getElementById('btn-start-training');
+      const btnLabel = document.getElementById('btn-train-label');
+      const pBar = document.getElementById('train-progress-bar');
+      const statusText = document.getElementById('train-status-text');
+      const sampleCountEl = document.getElementById('train-sample-count');
+      const targetBox = document.getElementById('train-target-box');
+
+      if (btn) btn.disabled = true;
+      if (btnLabel) btnLabel.innerText = 'TRAINING IN PROGRESS... HOLD STEADY';
+      if (targetBox) {
+        targetBox.classList.remove('border-purple-400/80');
+        targetBox.classList.add('border-emerald-400', 'animate-pulse');
+      }
+
+      playStarkChime('ack');
+      const startAnnounce = jarvisState.language === 'hi'
+        ? `प्रशिक्षण शुरू हो रहा है। ${nameHi} को बॉक्स के अंदर स्थिर रखें।`
+        : `Training started for ${nameEn}. Hold the object steady inside the box.`;
+      speakJarvis(startAnnounce);
+
+      const capturedVectors = [];
+      const totalSamples = 15;
+      let count = 0;
+
+      const interval = setInterval(() => {
+        count++;
+        const pct = Math.round((count / totalSamples) * 100);
+        if (pBar) pBar.style.width = `${pct}%`;
+        if (statusText) statusText.innerText = `SAMPLING: ${count} / ${totalSamples}`;
+        if (sampleCountEl) sampleCountEl.innerText = `${count} / ${totalSamples} SAMPLES`;
+
+        // Extract 80-D vector from center region
+        const vw = video.videoWidth || 640;
+        const vh = video.videoHeight || 480;
+        const cropSize = Math.min(vw, vh) * 0.45;
+        const sx = (vw - cropSize) / 2;
+        const sy = (vh - cropSize) / 2;
+
+        const vec = teachableVisionEngine.extractFeaturesFromCrop(video, sx, sy, cropSize, cropSize);
+        capturedVectors.push(vec);
+
+        if (count >= totalSamples) {
+          clearInterval(interval);
+          finishTraining();
+        }
+      }, 180);
+
+      function finishTraining() {
+        // Compute average centroid vector
+        const centroid = new Float32Array(80);
+        for (const vec of capturedVectors) {
+          for (let i = 0; i < 80; i++) {
+            centroid[i] += vec[i];
+          }
+        }
+        let normSq = 0;
+        for (let i = 0; i < 80; i++) {
+          centroid[i] /= capturedVectors.length;
+          normSq += centroid[i] * centroid[i];
+        }
+        const norm = Math.sqrt(normSq) || 1;
+        for (let i = 0; i < 80; i++) centroid[i] /= norm;
+
+        const newItem = {
+          id: 'item_' + Date.now(),
+          nameEn,
+          nameHi,
+          centroid: Array.from(centroid),
+          date: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          sampleCount: totalSamples
+        };
+
+        teachableVisionEngine.customItems.push(newItem);
+        teachableVisionEngine.saveItems();
+        teachableVisionEngine.isTraining = false;
+
+        if (btn) btn.disabled = false;
+        if (btnLabel) btnLabel.innerText = 'CAPTURE & TRAIN MODEL (15 SAMPLES)';
+        if (targetBox) {
+          targetBox.classList.remove('border-emerald-400', 'animate-pulse');
+          targetBox.classList.add('border-purple-400/80');
+        }
+        if (statusText) statusText.innerText = 'STATUS: TRAINING COMPLETE!';
+
+        playStarkChime('proceed-straight');
+        const doneAnnounce = jarvisState.language === 'hi'
+          ? `${nameHi} सफलतापूर्वक सीख लिया गया है। दृष्टि साथी अब इसे पहचान लेगा।`
+          : `Successfully trained ${nameEn}. Drishti Saathi will now recognize it in real time.`;
+        speakJarvis(doneAnnounce);
+
+        // Reset inputs
+        if (nameEnInput) nameEnInput.value = '';
+        if (nameHiInput) nameHiInput.value = '';
+      }
+    }
+
+    /* -------------------------------------------------------------
        8. INITIALIZATION
        ------------------------------------------------------------- */
     function updateClock() {
@@ -2612,14 +4348,32 @@
       document.getElementById('live-clock').innerText = now.toTimeString().split(' ')[0] + ' UTC';
     }
 
-    // First interaction anywhere on screen unlocks and launches hands-free Jarvis listening
+    // First interaction anywhere on screen unlocks camera, resumes video, activates wake lock & launches hands-free listening
     window.addEventListener('click', (e) => {
+      ensureVideoPlaying();
+      requestMobileWakeLock();
+      if (!jarvisState.cameraStream) {
+        initCameraStream();
+      }
       if (!jarvisState.isAutoListeningActive) {
         activateJarvisVoiceMatrix();
       }
     });
 
+    window.addEventListener('touchstart', (e) => {
+      ensureVideoPlaying();
+      requestMobileWakeLock();
+      if (!jarvisState.cameraStream) {
+        initCameraStream();
+      }
+    }, { passive: true });
+
     window.addEventListener('keydown', (e) => {
+      ensureVideoPlaying();
+      requestMobileWakeLock();
+      if (!jarvisState.cameraStream) {
+        initCameraStream();
+      }
       if (!jarvisState.isAutoListeningActive) {
         activateJarvisVoiceMatrix();
         return;
@@ -2637,8 +4391,22 @@
       }
       if (camCanvas) {
         camCanvas.width = camCanvas.clientWidth || 320;
-        camCanvas.height = camCanvas.clientHeight || 176;
+        camCanvas.height = camCanvas.clientHeight || 192;
       }
+
+      // Initialize responsive mobile/tablet layout
+      if (window.innerWidth < 1024) {
+        setMobileView('camera');
+      } else {
+        setMobileView('all');
+      }
+      requestMobileWakeLock();
+
+      // Start live camera stream immediately
+      initCameraStream();
+      teachableVisionEngine.init();
+      objectDetectionEngine.loadModel();
+      updateObjectInFrontUI();
       renderOpticalVisionCanvas();
       drawCircularWaveform();
       setInterval(updateClock, 1000);
